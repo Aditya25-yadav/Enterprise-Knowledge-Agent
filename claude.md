@@ -710,3 +710,56 @@ This document maintains a chronological record of all architectural decisions, c
 - [`RESEARCH.md`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/RESEARCH.md) (Jira credential/URL checklist)
 
 ---
+
+## Step 37: LLMProvider Abstraction & Ingestion Chunker (`backend/llm/` & `backend/ingestion/`)
+- **Date:** 2026-09-09
+- **Time:** 11:24 IST
+- **Purpose:** Implemented Phase 0 (Provider-agnostic LLM interface with Gemini & Ollama implementations) and Phase 1 (Structure-preserving and connector-aware OKF Chunker).
+
+### Key Decisions & Rationale:
+1. **`LLMProvider` Base Abstraction (`backend/llm/base.py`)**:
+   - Provider-agnostic message and tool schema definitions (`Message`, `ToolDefinition`, `ToolCall`, `LLMResponse`).
+   - Clean decoupling: Agent and generation layers depend solely on `LLMProvider`, allowing seamless zero-code switching between Gemini API (cloud) and Ollama (local private deployment).
+2. **`GeminiProvider` (`backend/llm/gemini_provider.py`)**:
+   - Uses the official `google-genai` SDK with Gemini 2.0 Flash.
+   - Converts standard JSON Schema directly to `types.FunctionDeclaration` without custom schema conversions.
+   - Manual turn handling with `automatic_function_calling=False` so agent planner maintains full determinism.
+3. **`OllamaProvider` (`backend/llm/ollama_provider.py`)**:
+   - Local LLM provider supporting tool calling on models like `llama3.1` and `qwen2.5`.
+4. **`LLMProvider` Factory (`backend/llm/factory.py`)**:
+   - `get_llm_provider()` dynamically instantiates provider based on `LLM_PROVIDER` environment variable.
+5. **`Chunk` Data Model (`backend/ingestion/chunk.py`)**:
+   - Holds the chunk text, source, resource ID, section heading, indices, and full RBAC permissions dictionary.
+   - Includes `.to_qdrant_payload()` for vector indexing with pre-filter keys (`is_public`, `allowed_roles`, `allowed_users`, `allowed_groups`).
+6. **`OKFChunker` (`backend/ingestion/chunker.py`)**:
+   - Markdown header-based semantic boundary splitting.
+   - Preserves markdown tables and code fences without mid-block truncations.
+   - Size-bounded windowing with configurable overlap.
+
+### Files Created:
+- [`backend/llm/__init__.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/llm/__init__.py)
+- [`backend/llm/base.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/llm/base.py)
+- [`backend/llm/gemini_provider.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/llm/gemini_provider.py)
+- [`backend/llm/ollama_provider.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/llm/ollama_provider.py)
+- [`backend/llm/factory.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/llm/factory.py)
+- [`backend/ingestion/__init__.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/ingestion/__init__.py)
+- [`backend/ingestion/chunk.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/ingestion/chunk.py)
+- [`backend/ingestion/chunker.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/ingestion/chunker.py)
+
+### Next Step:
+- Phase 2: Local Embeddings (`sentence-transformers`) + Qdrant Vector Storage Client (`backend/storage/qdrant_client.py`) + Ingestion Pipeline.
+
+## Step 38: Updated `.env.example` with Local/Cloud Hybrid Configuration
+- **Date:** 2026-09-09
+- **Time:** 12:58 IST
+- **Purpose:** Comprehensive update to `.env.example` documenting all configuration keys for the swappable LLM provider layer, local sentence-transformers embeddings, local cross-encoder reranker, and Qdrant local/server modes.
+
+### Key Sections Updated:
+1. **LLM Provider**: `LLM_PROVIDER` (`gemini` / `ollama`), `GEMINI_API_KEY`, `GEMINI_MODEL`, `OLLAMA_MODEL`, `OLLAMA_BASE_URL`.
+2. **Local Embeddings & Reranker**: `EMBEDDING_PROVIDER=local`, `EMBEDDING_MODEL=BAAI/bge-base-en-v1.5`, `RERANKER_PROVIDER=local`, `RERANKER_MODEL=cross-encoder/ms-marco-MiniLM-L-6-v2`.
+3. **Vector Database**: `QDRANT_MODE` (`local` / `server`), `QDRANT_PATH`, `QDRANT_URL`, `QDRANT_COLLECTION`.
+4. **Knowledge Graph**: `NEO4J_URI`, `NEO4J_USERNAME`, `NEO4J_PASSWORD`, `NEO4J_DATABASE`.
+5. **Connectors**: GitHub, Notion, Dropbox, Confluence, Jira, Slack, Drive.
+
+### Files Modified:
+- [`.env.example`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/.env.example)

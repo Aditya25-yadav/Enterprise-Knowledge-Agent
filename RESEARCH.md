@@ -2439,6 +2439,7 @@ structurally.
 ## ADF: parsing JSON, not HTML
 
 ADF nodes are recursive `{type, attrs, content}` objects. We walk the tree depth-first:
+
 - `text` inline nodes fold into concatenated strings; marks apply formatting that is
   discarded for retrieval but preserved in Markdown where trivial.
 - `bulletList`/`orderedList`/`listItem` map to nested content blocks.
@@ -2449,13 +2450,16 @@ ADF nodes are recursive `{type, attrs, content}` objects. We walk the tree depth
 ## Jira connector processing layers
 
 ### 1. Project-level information
+
 Key + name establish the record; a lightweight project overview doc is generated on request.
 
 ### 2. Issue-level information
+
 Summary, status, assignee, labels, and the full parsed ADF description become a document
 whose body carries retrievable operational detail.
 
 ### 3. Preserve source information
+
 Every block is traceable to the issue key and `jira://issues/{key}` for citations.
 
 ## Why separate fetch from normalization (again)
@@ -2472,8 +2476,8 @@ re-process an issue only when `updated > last_synced_time`.
 
 1. `JIRA_URL` must point to the **actual Jira site the API token was issued for**
    (e.g. `https://your-org.atlassian.net`). Setting it to the generic account portal
-   `https://home.atlassian.com` is a silent killer: that host answers with the *Atlassian
-   Home* HTML page at HTTP 200, so `test_connection()` passes while every `response.json()`
+   `https://home.atlassian.com` is a silent killer: that host answers with the _Atlassian
+   Home_ HTML page at HTTP 200, so `test_connection()` passes while every `response.json()`
    call throws `Expecting value: line 1 column 1`.
 2. `JIRA_USERNAME` must be the exact account e-mail linked to the API token, not an
    employee ID or display name.
@@ -2488,5 +2492,822 @@ re-process an issue only when `updated > last_synced_time`.
 **Jira becomes a task knowledge source where projects act as domains and issues as
 documents — descriptions parsed from ADF keep nested structure and tables so operational
 knowledge stays retrievable.**
+
+---
+
+                 CONNECTORS
+                     │
+                     ▼
+             Raw Source Objects
+                     │
+                     ▼
+             ┌───────────────┐
+             │  OKF Adapter  │
+             └───────────────┘
+                     │
+                     ▼
+                  OKF
+                     │
+            ┌────────┼────────┐
+            │        │        │
+            ▼        ▼        ▼
+         Chunking  Metadata  Entities
+            │        │        │
+            ▼        │        ▼
+       Embeddings    │    Relationships
+            │        │        │
+            ▼        ▼        ▼
+        Vector DB  Metadata  Neo4j
+                     Store
+            │        │        │
+            └────────┼────────┘
+                     ▼
+              KNOWLEDGE LAYER
+                     │
+                     ▼
+                 USER QUERY
+                     │
+                     ▼
+               Query Analysis
+                     │
+                     ▼
+                  Planner
+                     │
+        ┌────────────┼────────────┐
+        ▼            ▼            ▼
+
+Vector Search BM25 Graph Search
+│ │ │
+└────────────┼────────────┘
+▼
+RRF / Fusion
+│
+▼
+Permission Filter
+│
+▼
+Reranking
+│
+▼
+Context Builder
+│
+▼
+LLM
+│
+▼
+Answer + Citations
+
+---
+
+Once ingestion is working, the query pipeline becomes:
+
+User
+│
+▼
+"What projects does the team
+owning Service X also support?"
+│
+▼
+Query Analysis
+│
+▼
+Planner
+
+The planner decides:
+
+Need:
+✓ Entity lookup
+✓ Graph traversal
+✓ Possibly vector retrieval
+
+Then:
+
+                   Query
+                     │
+        ┌────────────┼────────────┐
+        ▼            ▼            ▼
+      Vector        BM25        Graph
+        │            │            │
+        ▼            ▼            ▼
+    Results       Results      Results
+        └────────────┼────────────┘
+                     ▼
+                 Fusion
+                     │
+                     ▼
+                Reranking
+                     │
+                     ▼
+              Permission Check
+                     │
+                     ▼
+                 Context
+                     │
+                     ▼
+                    LLM
+
+17. Important: RBAC placement
+
+I would actually modify the diagram slightly from the current document.
+
+Don't think of permissions as only:
+
+retrieval → permission check
+
+We should have two levels.
+
+At ingestion
+Source
+│
+▼
+Permissions extracted
+│
+▼
+Stored in OKF
+│
+├── Vector metadata
+├── Graph properties
+└── Metadata DB
+At retrieval
+User
+│
+▼
+Identity / Groups
+│
+▼
+Allowed resources
+│
+▼
+Search with permission filters
+
+---
+
+Then hybrid fusion
+
+Suppose:
+
+Vector results
+A rank 1
+B rank 2
+C rank 3
+BM25
+C rank 1
+D rank 2
+A rank 3
+Graph
+D rank 1
+A rank 2
+
+We don't simply add raw scores because the scoring systems are different.
+
+Use something like Reciprocal Rank Fusion (RRF):
+
+RRF(d) = Σ 1 / (k + rank(d))
+
+Then:
+
+Vector ──┐
+BM25 ────┼──> RRF ──> unified ranking
+Graph ───┘
+
+This is the right place to start before introducing a more sophisticated reranker.
+
+---
+
+Reranking comes after fusion
+
+For the top ~20 results:
+
+RRF
+│
+▼
+Top 20
+│
+▼
+Cross Encoder / LLM Reranker
+│
+▼
+Top 5-10
+
+This improves precision before sending context to the LLM.
+
+Don't rerank 10,000 documents.
+
+---
+
+Agent / Planner
+
+Only after the retrieval tools independently work.
+
+The planner gets tools such as:
+
+vector_search()
+keyword_search()
+graph_search()
+get_document()
+
+Then:
+
+User Query
+│
+▼
+Planner
+│
+├── vector_search()
+│
+├── graph_search()
+│
+└── keyword_search()
+
+This prevents us from debugging connectors + RAG + graph + agent simultaneously.
+
+I would not make the entire system “agentic.” The core ingestion and retrieval should remain deterministic, while the agent orchestrates retrieval tools.
+
+---
+
+    USER
+                           │
+                           ▼
+                  ┌─────────────────┐
+                  │  Agent / Planner │
+                  │     (LLM)       │
+                  └────────┬────────┘
+                           │
+                 Tool Selection / Calls
+                           │
+          ┌────────────────┼────────────────┐
+          │                │                │
+          ▼                ▼                ▼
+
+Vector Search Keyword Search Graph Search
+Tool Tool Tool
+│ │ │
+└────────────────┼────────────────┘
+▼
+Retrieved Evidence
+│
+▼
+Permission Validator
+│
+▼
+Context Builder
+│
+▼
+Answer Generator
+│
+▼
+Answer + Citations
+
+This gives you a genuine Agentic RAG system, rather than simply adding an LLM in front of a RAG pipeline.
+
+2. But there's an important distinction
+
+I would divide the system into:
+
+Deterministic layer
+Connectors
+OKF
+Chunking
+Embeddings
+Vector DB
+Neo4j
+Keyword index
+Permissions
+Agentic layer
+Query understanding
+Planning
+Tool selection
+Multi-step retrieval
+Reasoning
+Result synthesis
+
+That's a much stronger architecture.
+
+The agent should not decide how GitHub pagination works, how documents are chunked, or how embeddings are generated.
+
+Those are deterministic engineering pipelines.
+
+The agent decides:
+
+"What information do I need to answer this question, and which retrieval tool should I use to obtain it?"
+
+3. Your ingestion pipeline remains mostly non-agentic
+
+I'd keep:
+
+                 CONNECTORS
+                     │
+                     ▼
+                  Raw Data
+                     │
+                     ▼
+                OKF Normalizer
+                     │
+                     ▼
+                  OKF Objects
+                     │
+          ┌──────────┼───────────┐
+          ▼          ▼           ▼
+       Chunking   Metadata    Entities
+          │          │           │
+          ▼          │           ▼
+     Embeddings       │      Relationships
+          │           │           │
+          ▼           ▼           ▼
+       Qdrant     PostgreSQL    Neo4j
+
+This happens before the user asks anything.
+
+It's your knowledge-building pipeline.
+
+---
+
+Then the agent sits on top of the knowledge layer
+
+Now consider a user asking:
+
+"What caused the authentication issue in the payment service, and which PR fixed it?"
+
+This is interesting because one retrieval mechanism isn't enough.
+
+The agent can reason:
+
+I need:
+
+1. Authentication issue
+2. Payment service
+3. Related PR
+4. Cause
+5. Resolution
+
+It might call:
+
+search_keyword("authentication payment")
+
+then:
+
+graph_search("authentication issue")
+
+then:
+
+vector_search("cause of authentication issue")
+
+Then possibly:
+
+get_resource("PR-1842")
+
+That's genuine tool calling.
+
+5. What tools should we expose?
+
+I'd start with 5–7 tools, not 20.
+
+Tool 1 — Semantic Search
+vector_search(
+query: str,
+filters: dict,
+top_k: int
+)
+
+Use for:
+
+"How does authentication work?"
+
+Tool 2 — Keyword Search
+keyword_search(
+query: str,
+filters: dict,
+top_k: int
+)
+
+Use for:
+
+"What happened in PR #1842?"
+
+Excellent for:
+
+PR IDs
+Jira IDs
+ticket numbers
+error codes
+function names
+exact names
+Tool 3 — Graph Search
+graph_search(
+entity: str,
+relationship: str,
+depth: int
+)
+
+For:
+
+"Who owns the service responsible for this project?"
+
+or:
+
+"Which projects does the team that owns Service X support?"
+
+Tool 4 — Resource Lookup
+get_resource(
+resource_id: str
+)
+
+This is important.
+
+The agent might discover:
+
+PR #1842
+
+and then ask for the complete resource.
+
+Tool 5 — Related Resources
+get_related_resources(
+resource_id: str,
+relationship: str
+)
+
+For example:
+
+PR #1842
+│
+├── FIXES ──> PAY-928
+├── AUTHOR ─> John
+└── REPO ───> payments-api
+Tool 6 — Permission Check
+check_access(
+user_id: str,
+resource_ids: list[str]
+)
+
+Although I'd actually make this partly infrastructure-level rather than allowing the LLM to control it.
+
+The agent should never be trusted to decide:
+
+"Yes, this user can see this document."
+
+The authorization engine decides that.
+
+6. The really interesting part: agentic planning
+
+The agent receives:
+
+User:
+"Why did the payment service fail yesterday and which engineer fixed it?"
+
+Instead of automatically running all searches:
+
+Vector
+
+- BM25
+- Graph
+
+the planner creates a plan:
+
+PLAN
+
+Step 1:
+Find incidents related to payment service yesterday.
+
+Step 2:
+Identify the relevant incident.
+
+Step 3:
+Find GitHub/Jira resources related to the incident.
+
+Step 4:
+Identify engineer who implemented the fix.
+
+Step 5:
+Retrieve supporting evidence.
+
+Step 6:
+Synthesize answer.
+
+Then tool calling executes the plan.
+
+7. This is where LangGraph becomes very useful
+
+Since you're already working with LangGraph, I'd use it for the orchestration.
+
+Something like:
+
+                    START
+                      │
+                      ▼
+                Query Analyzer
+                      │
+                      ▼
+                 Agent Planner
+                      │
+                      ▼
+              ┌───────────────┐
+              │  Tool Router  │
+              └───────┬───────┘
+                      │
+        ┌─────────────┼─────────────┐
+        ▼             ▼             ▼
+    Vector Tool   Keyword Tool   Graph Tool
+        │             │             │
+        └─────────────┼─────────────┘
+                      ▼
+                 Result Evaluator
+                      │
+                ┌─────┴─────┐
+                │           │
+             Enough?       No
+                │           │
+               Yes          ▼
+                │       More Tools
+                │           │
+                └───────────┘
+                      │
+                      ▼
+                Permission Check
+                      │
+                      ▼
+                Context Builder
+                      │
+                      ▼
+                 Answer LLM
+                      │
+                      ▼
+                  Citations
+                      │
+                     END
+
+This is much more interesting than a simple:
+
+query → retriever → LLM 8. Add a "critic/evaluator" node
+
+I'd strongly recommend this.
+
+After retrieval:
+
+Retrieved Evidence
+│
+▼
+Evidence Evaluator
+│
+├── Sufficient → Answer
+│
+└── Insufficient
+│
+▼
+Planner
+│
+▼
+Another tool call
+
+Example:
+
+User:
+
+"Who approved the authentication fix?"
+
+Agent searches vector DB.
+
+It finds:
+
+PR #1842
+Author: John
+Description: ...
+
+But it doesn't find reviewer information.
+
+The evaluator says:
+
+Missing:
+
+- reviewer/approver
+
+Agent then calls:
+
+get_related_resources(
+PR-1842,
+"reviewed_by"
+)
+
+Now it can answer.
+
+This is where your system becomes genuinely agentic.
+
+9. Multi-hop questions become very powerful
+
+Consider:
+
+"Which engineers working on Project Alpha contributed to the service that caused the payment outage?"
+
+That's almost impossible to answer reliably with pure vector RAG.
+
+The agent can do:
+
+Project Alpha
+│
+▼
+Team
+│
+▼
+Engineers
+│
+▼
+Services
+│
+▼
+Payment Service
+│
+▼
+Incident
+│
+▼
+PRs / Commits
+
+That's Graph RAG.
+
+But the agent decides when to invoke Graph RAG.
+
+That's the key architecture:
+
+Agentic RAG + Graph RAG, rather than choosing between them.
+
+10. Don't make the agent call Neo4j directly
+
+This is another important design decision.
+
+Don't give the LLM a tool like:
+
+execute_cypher(query)
+
+Initially.
+
+Instead expose:
+
+graph_search(
+entity="Payment Service",
+relationship="owned_by",
+depth=2
+)
+
+The tool internally handles:
+
+Agent
+↓
+graph_search()
+↓
+Query Builder
+↓
+Neo4j
+↓
+Results
+
+This gives you control over the graph schema and prevents arbitrary Cypher generation.
+
+Later, if you want, you can add controlled Cypher generation.
+
+11. Same principle for vector DB
+
+Don't expose:
+
+execute_qdrant_query(...)
+
+Expose:
+
+semantic_search(
+query,
+filters,
+top_k
+)
+
+The agent determines what to search, not how your infrastructure works.
+
+12. I would actually introduce a Retrieval Tool Layer
+
+This makes the architecture clean:
+
+                    AGENT
+                      │
+                      ▼
+             Retrieval Tool Layer
+                      │
+       ┌──────────────┼──────────────┐
+       ▼              ▼              ▼
+
+SemanticSearch KeywordSearch GraphSearch
+│ │ │
+▼ ▼ ▼
+Qdrant BM25 Neo4j
+
+Then another layer:
+
+             Retrieval Tool Layer
+                      │
+                      ▼
+                 Result Fusion
+                      │
+                      ▼
+                  Reranker
+
+So the agent doesn't need to know that Qdrant or Neo4j exists.
+
+That's an abstraction I would definitely keep.
+
+13. Where does hybrid search fit?
+
+There are actually two possible modes.
+
+Mode A — Agent chooses tools
+Question
+↓
+Agent
+↓
+Graph Search
+↓
+Answer
+
+For a simple relationship question.
+
+Mode B — Agent invokes hybrid retrieval
+
+We can expose:
+
+hybrid_search(query)
+
+which internally performs:
+
+           hybrid_search()
+                 │
+       ┌─────────┼─────────┐
+       ▼         ▼         ▼
+    Vector      BM25      Graph
+       │         │         │
+       └─────────┼─────────┘
+                 ▼
+                RRF
+                 ▼
+             Reranker
+
+This is useful for broad questions.
+
+So the agent has a choice:
+
+                 Agent
+                   │
+        ┌──────────┼───────────┐
+        ▼          ▼           ▼
+    Vector       Graph      Hybrid
+    Search       Search     Search
+
+14. I would NOT make "vector search", "BM25", and "graph search" mandatory every time
+
+That's wasteful.
+
+For:
+
+"What is the vacation policy?"
+
+Just:
+
+Agent
+↓
+Vector Search
+↓
+Answer
+
+For:
+
+"What is PAY-123?"
+
+Agent
+↓
+Keyword Search
+↓
+Get Resource
+↓
+Answer
+
+For:
+
+"Who owns the service used by Project X?"
+
+Agent
+↓
+Graph Search
+↓
+Answer
+
+For:
+
+"Why did Project X fail and which PR fixed it?"
+
+Agent
+↓
+Hybrid
+↓
+Graph
+↓
+Resource Lookup
+↓
+Answer
+
+That's exactly where agentic architecture provides value.
 
 ---
