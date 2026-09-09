@@ -763,3 +763,25 @@ This document maintains a chronological record of all architectural decisions, c
 
 ### Files Modified:
 - [`.env.example`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/.env.example)
+
+## Step 39: Added `extra_metadata` to OKFConcept & Ingestion Chunker
+- **Date:** 2026-09-09
+- **Time:** 14:03 IST
+- **Purpose:** Propagated connector-specific properties (e.g., GitHub PR numbers/branches, Gmail sender/recipients/thread IDs, Jira keys/sprints, Dropbox file sizes/revs) from `DocumentMetadata.extra` through `OKFConcept.extra_metadata` into `Chunk.extra_metadata` and the Qdrant payload dictionary.
+
+### Key Changes:
+1. **`OKFConcept` (`backend/models/okf.py`)**:
+   - Added `extra_metadata: Dict[str, Any] = field(default_factory=dict)`.
+   - Updated `to_okf_markdown()` to render `extra_metadata` cleanly in YAML frontmatter.
+   - Updated `to_dict()` to include `extra_metadata` for JSON serialization.
+   - Updated `from_intermediate_document()` to automatically inherit `doc.metadata.extra`.
+2. **`OKFChunker` (`backend/ingestion/chunker.py`)**:
+   - Merges `concept.extra_metadata` into each output `Chunk.extra_metadata`.
+   - Ensures payload metadata is ready for Qdrant filtering queries.
+
+### Files Modified:
+- [`backend/models/okf.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/models/okf.py)
+- [`backend/ingestion/chunker.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/ingestion/chunker.py)
+
+### Next Step:
+- Phase 2: Local Embeddings (`sentence-transformers`) + Qdrant Vector Storage Client (`backend/storage/qdrant_client.py`) + Ingestion Pipeline (`backend/ingestion/pipeline.py`).

@@ -96,6 +96,7 @@ class OKFChunker:
                 "status": concept.status,
                 "trust_tier": concept.trust_tier,
                 "has_structured_data": len(concept.structured_data) > 0,
+                **(concept.extra_metadata or {}),
             },
         )
 
