@@ -1,4 +1,11 @@
 """
 Storage Layer for Enterprise Knowledge Agent.
-Manages Vector DB (Qdrant), Keyword Search (BM25), and Metadata persistence.
 """
+
+from backend.storage.bm25_index import BM25Index
+from backend.storage.qdrant_client import QdrantVectorStore
+
+__all__ = [
+    "BM25Index",
+    "QdrantVectorStore",
+]

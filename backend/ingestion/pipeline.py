@@ -26,13 +26,14 @@ from backend.ingestion.chunker import SmartOKFChunker
 from backend.ingestion.embedder import LocalEmbedder
 from backend.models.document import Document
 from backend.models.okf import OKFBundle, OKFConcept
+from backend.storage.bm25_index import BM25Index
 from backend.storage.qdrant_client import QdrantVectorStore
 
 
 class IngestionPipeline:
     """
     End-to-end ingestion orchestrator that chunks, embeds, and indexes
-    knowledge documents into local vector and keyword storage.
+    knowledge documents into local vector (Qdrant) and keyword (BM25) storage.
     """
 
     def __init__(
@@ -40,10 +41,12 @@ class IngestionPipeline:
         chunker: Optional[SmartOKFChunker] = None,
         embedder: Optional[LocalEmbedder] = None,
         vector_store: Optional[QdrantVectorStore] = None,
+        bm25_index: Optional[BM25Index] = None,
     ) -> None:
         self.chunker = chunker or SmartOKFChunker()
         self.embedder = embedder or LocalEmbedder()
         self.vector_store = vector_store or QdrantVectorStore()
+        self.bm25_index = bm25_index or BM25Index()
 
     def ingest_concept(self, concept: OKFConcept) -> Dict[str, Any]:
         """
@@ -51,6 +54,7 @@ class IngestionPipeline:
           1. Splits concept body into linked SmartChunks.
           2. Generates local dense vector embeddings.
           3. Upserts points with full security payloads into Qdrant.
+          4. Indexes chunks into BM25 keyword index with RBAC metadata.
         """
         t0 = time.time()
 
@@ -68,8 +72,11 @@ class IngestionPipeline:
         # Step 2: Local Vector Embeddings
         chunk_vector_pairs = self.embedder.embed_chunks(chunks)
 
-        # Step 3: Vector Store Upsert
+        # Step 3: Vector Store Upsert (Qdrant)
         points_upserted = self.vector_store.upsert_chunks(chunk_vector_pairs)
+
+        # Step 4: Keyword Indexing (BM25)
+        bm25_chunks_indexed = self.bm25_index.add_chunks(chunks)
 
         elapsed = round(time.time() - t0, 3)
         return {
@@ -77,6 +84,7 @@ class IngestionPipeline:
             "title": concept.title,
             "chunks_count": len(chunks),
             "points_upserted": points_upserted,
+            "bm25_indexed": bm25_chunks_indexed,
             "elapsed_seconds": elapsed,
             "status": "success",
             "chunks": chunks,

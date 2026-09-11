@@ -890,3 +890,37 @@ This document maintains a chronological record of all architectural decisions, c
 
 ### Next Step:
 - Phase 3: BM25 Keyword Search Index (`backend/storage/bm25_index.py`).
+
+## Step 45: Implemented BM25 Keyword Search Index (`backend/storage/bm25_index.py`) (Phase 3)
+- **Date:** 2026-09-11
+- **Time:** 22:13 IST
+- **Purpose:** Implemented Phase 3 of the Agentic RAG architecture: the BM25 Keyword Search Index for exact token/identifier lookups (Jira ticket keys, PR numbers, code symbol names, error codes), complete with enterprise-aware tokenization, RBAC pre-filtering, disk persistence, and dual-indexing integration with `IngestionPipeline`.
+
+### Key Features Built:
+1. **`BM25Index` (`backend/storage/bm25_index.py`)**:
+   - Uses `BM25Plus` from `rank-bm25==0.2.2` (eliminating negative/zero IDF pathologies on small/heterogeneous corpora).
+   - **Code & Identifier Aware Tokenizer**: Preserves `snake_case`, `kebab-case`, `camelCase`, ticket keys (`PAY-928`), PR identifiers (`#1842`), and error codes (`HTTP 401`).
+   - **Strict RBAC Pre-Filtering**: Evaluates `is_public`, `allowed_roles`, `allowed_users`, and `allowed_groups` on keyword results before returning candidates.
+   - **Disk Persistence**: Serializes corpus and metadata to JSON (`./data/bm25_index.json`), instant reload on application restart.
+2. **Dual-Index Ingestion Pipeline (`backend/ingestion/pipeline.py`)**:
+   - `IngestionPipeline.ingest_concept()` now automatically writes to **both Qdrant (dense vectors) and BM25 (sparse lexical index)** in a single call.
+3. **Automated Test Suite (`backend/storage/tests/test_bm25_index.py`)**:
+   - 5 comprehensive tests validating identifier extraction, exact searches, RBAC security boundaries, disk reload, and pipeline dual-indexing.
+
+### Files Created/Modified:
+- [`backend/storage/bm25_index.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/storage/bm25_index.py)
+- [`backend/storage/__init__.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/storage/__init__.py)
+- [`backend/ingestion/pipeline.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/ingestion/pipeline.py)
+- [`backend/storage/tests/test_bm25_index.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/storage/tests/test_bm25_index.py)
+- [`requirements.txt`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/requirements.txt)
+
+### Next Step:
+- Phase 4: Basic Agent + Semantic Search Retrieval Tool (M1 Milestone) (`backend/retrieval/semantic.py`, `backend/agent/tools.py`, `backend/agent/planner.py`, `backend/generation/context_builder.py`, `backend/generation/answer_generator.py`).
+
+## Step 46: Documented Verification Guide in `docs/verify_phase2.md`
+- **Date:** 2026-09-11
+- **Time:** 22:14 IST
+- **Purpose:** Created comprehensive documentation in `docs/verify_phase2.md` detailing the execution, test architecture, chunk structure inspection, local model caching, and RBAC pre-filtering verification provided by `scripts/verify_phase2.py`.
+
+### Files Created:
+- [`docs/verify_phase2.md`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/docs/verify_phase2.md)

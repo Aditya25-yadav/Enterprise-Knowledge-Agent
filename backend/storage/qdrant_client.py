@@ -234,6 +234,7 @@ class QdrantVectorStore:
                 limit=top_k,
             )
             points = response.points
+            
         else:
             points = self._client.search(
                 collection_name=col_name,
