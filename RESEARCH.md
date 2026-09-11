@@ -3311,3 +3311,256 @@ Answer
 That's exactly where agentic architecture provides value.
 
 ---
+
+# Structure-Aware, Semantic & Hierarchical Chunking Architecture
+
+## 1. The Core Principle: Structure-First, Chunk-Second
+
+A naive approach of splitting text purely by token or character counts (e.g. `text[:500]`) fundamentally breaks down in enterprise knowledge systems. It destroys:
+- **Hierarchical Context**: Detaching subheadings, bullet items, or table rows from their parent sections.
+- **Sequential Procedures**: Breaking ordered steps (`Step 1`, `Step 2`, `Step 3`), runbooks, and installation guides into disjointed fragments.
+- **Relational Integrity**: Severing conversations (Slack/Gmail threads), code classes/functions, and issue comments.
+
+> **Key Architectural Rule**: Chunking may reduce the size of a knowledge unit, but it must **never destroy the relationships and structural metadata** needed to reconstruct its complete original context.
+
+```text
+Document
+│
+├── 1. Introduction
+│    ├── paragraph
+│    └── paragraph
+│
+├── 2. Architecture
+│    ├── paragraph
+│    ├── diagram
+│    └── explanation
+│
+├── 3. API Flow (Procedure)
+│    ├── Step 1
+│    ├── Step 2
+│    ├── Step 3
+│    └── Step 4
+│
+└── 4. Conclusion
+```
+
+---
+
+## 2. Hierarchical Parent-Child Chunking
+
+Instead of flattening a document into unrelated chunks:
+
+```text
+Document
+ ├── Chunk 1
+ ├── Chunk 2
+ ├── Chunk 3
+ └── Chunk 4
+```
+
+We organize and store hierarchical structures:
+
+```text
+Document
+│
+├── Section 1 (Parent Section)
+│    ├── Chunk 1.1 (Child Chunk)
+│    └── Chunk 1.2 (Child Chunk)
+│
+├── Section 2 (Parent Section)
+│    ├── Chunk 2.1
+│    ├── Chunk 2.2
+│    └── Chunk 2.3
+│
+└── Section 3 (Parent Section)
+     ├── Chunk 3.1
+     └── Chunk 3.2
+```
+
+Each child chunk is embedded for precise vector matching, but retains references to:
+- `parent_id`: Identifier of parent section / container.
+- `parent_text`: Summary or header block of the parent section for small-to-large context expansion.
+- `section_path`: Complete breadcrumb hierarchy (e.g. `["Authentication", "OAuth 2.0", "PKCE Flow"]`).
+- `prev_chunk_id` and `next_chunk_id`: Sibling pointers for bidirectional neighbor expansion.
+
+---
+
+## 3. Dedicated Content-Specific Chunking Strategies
+
+Different data types require distinct structural treatment:
+
+```text
+                    Enterprise Content
+                            │
+        ┌───────────────────┼───────────────────┐
+        ▼                   ▼                   ▼
+ Structured Docs          Code             Conversation
+  (Notion/PDF/Drive)    (GitHub/GitLab)    (Gmail/Slack)
+        │                   │                   │
+        ▼                   ▼                   ▼
+   Hierarchical         AST / Symbol         Thread-Aware
+     Chunker              Chunker              Chunker
+```
+
+### Strategy A: Hierarchical Document Chunker (Notion, Drive, Confluence, PDFs)
+- Maintains a heading stack (`#`, `##`, `###`).
+- Attaches `section_path: ["Parent", "SubSection", "Detail"]`.
+- Retains tables and code fences as atomic units within their sections.
+
+### Strategy B: Procedure & Sequence Chunker (Runbooks, Setup Steps, Workflows)
+- Identifies ordered lists and steps (`Step 1:`, `1.`, `2.`, `Phase A`).
+- Populates `sequence: { sequence_id: "auth_setup", step: 2, total_steps: 5 }`.
+- Enables automatic multi-step expansion during retrieval.
+
+### Strategy C: Conversation Thread Chunker (Gmail, Slack)
+- The **thread** is the semantic unit, containing individual messages and replies.
+- Retains message ordering, timestamps, and participant metadata (`sender`, `recipients`, `channel`).
+
+### Strategy D: AST / Code Symbol Chunker (GitHub Source Code)
+- Divides code along function, class, and method boundaries rather than raw line counts.
+- Captures `language`, `symbol_name`, `start_line`, and `end_line`.
+
+### Strategy E: Tabular & Database Chunker (Databases & Spreadsheets)
+- Preserves table column headers on every chunk.
+- Generates natural language row summaries for dense embedding alongside structured Markdown tables.
+
+---
+
+## 4. The `SmartChunk` Data Contract
+
+```json
+{
+  "chunk_id": "github:repo:owner/repo#c3",
+  "resource_id": "github:repo:owner/repo",
+  "source": "github",
+  "resource_type": "repository",
+  "title": "Auth Architecture",
+  "url": "https://github.com/owner/repo/blob/main/docs/auth.md",
+  "text": "### Step 2: Validate JWT Signature\nValidate token with RS256 public key...",
+  
+  "content_type": "procedure_step",
+  "parent_id": "section_auth_flow",
+  "parent_text": "## Authentication Flow\nComplete 4-step sequence for OAuth token verification...",
+  
+  "prev_chunk_id": "github:repo:owner/repo#c2",
+  "next_chunk_id": "github:repo:owner/repo#c4",
+  "chunk_index": 3,
+  "total_chunks": 12,
+  
+  "section_path": ["Authentication", "OAuth 2.0", "Token Verification"],
+  "section_heading": "### Step 2: Validate JWT Signature",
+  
+  "sequence": {
+    "sequence_id": "oauth_token_verification",
+    "step": 2,
+    "total_steps": 4,
+    "step_title": "Validate JWT Signature"
+  },
+  
+  "permissions": {
+    "is_public": false,
+    "allowed_roles": ["engineer"],
+    "allowed_users": [],
+    "allowed_groups": ["security-team"]
+  },
+  
+  "created_at": "2026-09-01T00:00:00Z",
+  "updated_at": "2026-09-04T00:00:00Z",
+  "extra_metadata": {
+    "language": "python",
+    "branch": "main"
+  }
+}
+```
+
+---
+
+## 5. Bidirectional Neighbor & Sequence Expansion at Retrieval
+
+When a user submits a query:
+
+```text
+Query: "How does the OAuth token verification work?"
+                           │
+                           ▼
+              Vector Search hits Chunk #c3 (Step 2)
+                           │
+                           ▼
+          Metadata Inspection on Chunk #c3:
+          • content_type = "procedure_step"
+          • sequence_id = "oauth_token_verification" (Step 2 of 4)
+          • prev_chunk_id = "#c2", next_chunk_id = "#c4"
+          • section_path = ["Authentication", "OAuth 2.0", "Token Verification"]
+                           │
+                           ▼
+              CONTEXT EXPANSION ENGINE
+          Automatically retrieves Chunks #c2, #c3, #c4, #c5 (Steps 1 to 4)
+                           │
+                           ▼
+              Structured LLM Context:
+          [GITHUB] Auth Architecture > OAuth 2.0 > Token Verification
+          Step 1: Receive Bearer token in header...
+          Step 2: Validate JWT Signature...
+          Step 3: Check expiration claim...
+          Step 4: Extract user permissions...
+```
+
+The LLM receives the complete, cohesive multi-step procedure rather than a fragmented snippet.
+
+# Enterprise Embedding Model Evaluation & Architecture
+
+## 1. Workload Analysis for Enterprise Knowledge Agents
+
+Enterprise knowledge workloads are uniquely heterogeneous compared to standard web search benchmarks:
+- **Diverse Modalities**: Formal architecture docs (PDF/Notion), conversational threads (Gmail/Slack), structured issue tracking (Jira/GitHub PRs), source code (Python, JS, Go), and tabular records.
+- **Multilingual Requirements**: Enterprise teams communicate across multiple languages.
+- **Hybrid Retrieval Compatibility**: The embedding model must operate alongside BM25 lexical search, Graph RAG traversals, and Cross-Encoder rerankers in an RRF (Reciprocal Rank Fusion) pipeline.
+
+---
+
+## 2. Model Evaluation & Comparison
+
+| Model | Size / VRAM | Context Window | Strengths | Best Fit Role |
+| :--- | :--- | :--- | :--- | :--- |
+| **Qwen3-Embedding-0.6B** | ~1.2 GB VRAM | Up to 32K tokens | Fast, lightweight, code-aware, multilingual | 🥇 **Initial Development & Local Testing** |
+| **Qwen3-Embedding-4B** | ~8 GB VRAM | Up to 32K tokens | Top-tier retrieval accuracy across text + code + structured data | 🏆 **Production Deployment** |
+| **BAAI/bge-m3** | ~2.5 GB VRAM | Up to 8192 tokens | Multi-functionality (Dense + Sparse/Lexical + Multi-Vector) in one model | 🥈 **Hybrid Multi-Vector Alternative** |
+| **BAAI/bge-base-en-v1.5** | ~0.5 GB VRAM | 512 tokens | Lightweight 768-dim baseline, ultra-fast CPU inference | ⚙️ **In-Memory Unit Testing** |
+
+---
+
+## 3. Recommended Development to Production Roadmap
+
+```text
+Development Phase:
+  LocalEmbedder (Qwen3-Embedding-0.6B or bge-base-en-v1.5)
+         │
+         ▼
+  Qdrant (Local In-Process) + BM25 (In-Memory) + Neo4j (Local)
+         │
+         ▼
+  Enterprise 50-100 Question Evaluation Benchmark
+  (Recall@K, NDCG, MRR, Latency across GitHub, Jira, Notion, Gmail datasets)
+         │
+         ▼
+Production Deployment Phase:
+  Qwen3-Embedding-4B or BGE-M3 + Qwen3/BGE Reranker
+```
+
+---
+
+## 4. Context-Enriched Embedding Construction
+
+To maximize semantic retrieval precision, chunks are **never embedded in raw isolation**. The embedder constructs a structured, enriched context header:
+
+```text
+Title: Authentication Architecture
+Section: Engineering Architecture > Security & Auth > OAuth 2.0 PKCE Setup
+Step: 2/4 (Generate Code Challenge)
+Source: GITHUB
+Content:
+Compute the SHA-256 hash of the code verifier and base64url encode the digest...
+```
+
+* **For Vector Indexing**: The context-enriched text is embedded into the dense vector.
+* **For LLM Generation**: The original clean `chunk.text` is preserved in the payload to keep LLM context prompts clean and free of repetitive metadata headers.

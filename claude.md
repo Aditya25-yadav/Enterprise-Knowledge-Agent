@@ -785,3 +785,108 @@ This document maintains a chronological record of all architectural decisions, c
 
 ### Next Step:
 - Phase 2: Local Embeddings (`sentence-transformers`) + Qdrant Vector Storage Client (`backend/storage/qdrant_client.py`) + Ingestion Pipeline (`backend/ingestion/pipeline.py`).
+
+## Step 40: Documented Structure-Aware & Hierarchical Chunking in `RESEARCH.md`
+- **Date:** 2026-09-09
+- **Time:** 15:33 IST
+- **Purpose:** Appended the complete Structure-Aware, Semantic & Hierarchical Chunking Architecture section to `RESEARCH.md`, detailing parent-child chunking, sequence/procedure preservation, neighboring context expansion, connector-specific strategies, and the `SmartChunk` data contract.
+
+### Files Modified:
+- [`RESEARCH.md`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/RESEARCH.md)
+
+## Step 41: Upgraded Structure-Aware & Hierarchical Chunker (`backend/ingestion/`)
+- **Date:** 2026-09-10
+- **Time:** 22:32 IST
+- **Purpose:** Upgraded `Chunk` to `SmartChunk` with complete hierarchical parent-child relationships, bidirectional sibling pointers (`prev_chunk_id`, `next_chunk_id`), structural breadcrumb paths (`section_path`), content-type taxonomy (`ContentType`), and multi-step procedure sequence tracking (`SequenceInfo`).
+
+### Key Enhancements:
+1. **`SmartChunk` & Supporting Types (`backend/ingestion/chunk.py`)**:
+   - `ContentType`: `DOCUMENT_SECTION`, `PROCEDURE_STEP`, `CONVERSATION_THREAD`, `CODE_SYMBOL`, `TABLE_RECORD`, `GENERAL`.
+   - `SequenceInfo`: Tracks `sequence_id`, `step`, `total_steps`, and `step_title` for runbooks and workflows.
+   - `SmartChunk`: Carries `parent_id`, `parent_text`, `prev_chunk_id`, `next_chunk_id`, `section_path`, `sequence`, and RBAC permissions.
+   - Backward compatibility: `Chunk = SmartChunk`.
+2. **`SmartOKFChunker` Strategy Dispatchers (`backend/ingestion/chunker.py`)**:
+   - **Hierarchical Document Strategy**: Tracks heading stack for breadcrumbs, skips empty headers, and embeds section paths.
+   - **Procedure Sequence Strategy**: Automatically detects ordered workflows and step headings, populating `SequenceInfo`.
+   - **Conversation Thread Strategy**: Chunks email and chat turns retaining conversation context.
+   - **Code Symbol Strategy**: Splits code along function and class definitions.
+   - **Tabular Strategy**: Detects Markdown tables and preserves structured table records.
+   - **Second-Pass Sibling Linkage**: Stitches `prev_chunk_id` and `next_chunk_id` across all resulting chunks.
+3. **Comprehensive Test Suite (`backend/ingestion/tests/test_smart_chunker.py`)**:
+   - Validates breadcrumb path hierarchy, procedure step extraction, sibling links, code symbol parsing, and table classification.
+
+### Files Modified/Created:
+- [`backend/ingestion/chunk.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/ingestion/chunk.py)
+- [`backend/ingestion/chunker.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/ingestion/chunker.py)
+- [`backend/ingestion/__init__.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/ingestion/__init__.py)
+- [`backend/ingestion/tests/test_smart_chunker.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/ingestion/tests/test_smart_chunker.py)
+
+### Next Step:
+- Phase 2: Local Embeddings (`sentence-transformers`) + Qdrant Vector Storage Client (`backend/storage/qdrant_client.py`) + Ingestion Pipeline (`backend/ingestion/pipeline.py`).
+
+## Step 42: Local Embeddings (`sentence-transformers`) + Qdrant Storage + Ingestion Pipeline (Phase 2)
+- **Date:** 2026-09-10
+- **Time:** 22:37 IST
+- **Purpose:** Implemented Phase 2 of the Agentic RAG pipeline: local in-process embedding generation using `BAAI/bge-base-en-v1.5` (768 dimensions, zero API cost), Qdrant vector database client with strict RBAC pre-filtering, and the master `IngestionPipeline` tying chunks to vector storage.
+
+### Key Components Built:
+1. **`LocalEmbedder` (`backend/ingestion/embedder.py`)**:
+   - In-process local embedding model (`BAAI/bge-base-en-v1.5`) via `sentence-transformers==6.0.1`.
+   - Batch encoding support (`embed_texts`, `embed_chunks`) returning normalized 768-dimensional float vectors.
+   - Works 100% offline with zero external API calls.
+2. **`QdrantVectorStore` (`backend/storage/qdrant_client.py`)**:
+   - Manages local embedded storage (`./data/qdrant_storage`), in-memory testing (`:memory:`), and remote Qdrant servers.
+   - Idempotent upserting using deterministic UUID5 point IDs derived from `chunk_id`.
+   - **Strict RBAC Pre-filtering**: Enforces `(is_public == True) OR (allowed_roles IN user_roles) OR (allowed_users IN user_id) OR (allowed_groups IN user_groups)` at the database index layer before vector similarity scoring.
+3. **`IngestionPipeline` (`backend/ingestion/pipeline.py`)**:
+   - Master orchestrator: `Document / OKFConcept -> SmartOKFChunker -> LocalEmbedder -> QdrantVectorStore`.
+   - Supports single concept ingestion, document lists, and complete `OKFBundle` ingestion.
+4. **End-to-End Test Suite (`backend/ingestion/tests/test_pipeline.py`)**:
+   - Verified 768-dimensional vector generation.
+   - Validated that users with role `engineer` retrieve restricted internal secrets, while `guest` users are strictly pre-filtered out, while public company documents remain globally accessible.
+
+### Files Created/Modified:
+- [`backend/ingestion/embedder.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/ingestion/embedder.py)
+- [`backend/storage/__init__.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/storage/__init__.py)
+- [`backend/storage/qdrant_client.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/storage/qdrant_client.py)
+- [`backend/ingestion/pipeline.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/ingestion/pipeline.py)
+- [`backend/ingestion/tests/test_pipeline.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/ingestion/tests/test_pipeline.py)
+- [`requirements.txt`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/requirements.txt)
+
+### Next Step:
+- Phase 3: BM25 Keyword Search Index (`backend/storage/bm25_index.py`) for exact ID lookups (PR #, Jira keys, error codes).
+
+## Step 43: Implemented Context-Enriched Embedding & Model Analysis
+- **Date:** 2026-09-10
+- **Time:** 23:02 IST
+- **Purpose:** Upgraded `LocalEmbedder` to construct context-enriched text inputs (Title + Breadcrumb Section Path + Step Info + Source + Content) for vector encoding, ensuring dense vectors reflect document hierarchy while preserving clean raw text for LLM generation. Documented open-weight embedding model evaluation (`Qwen3-Embedding-0.6B/4B`, `BGE-M3`) in `RESEARCH.md`.
+
+### Files Modified:
+- [`backend/ingestion/embedder.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/ingestion/embedder.py)
+- [`RESEARCH.md`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/RESEARCH.md)
+
+### Next Step:
+- Phase 3: BM25 Keyword Search Index (`backend/storage/bm25_index.py`) for exact ID lookups (PR #, Jira keys, error codes).
+
+## Step 44: Configured `Qwen/Qwen3-Embedding-0.6B` as Primary Embedding Model
+- **Date:** 2026-09-10
+- **Time:** 23:08 IST
+- **Purpose:** Configured `Qwen/Qwen3-Embedding-0.6B` (1024 dimensions) as the primary default embedding model across the system, updating `LocalEmbedder`, `QdrantVectorStore`, `.env.example`, and test suites.
+
+### Key Updates:
+1. **`LocalEmbedder` (`backend/ingestion/embedder.py`)**:
+   - Default model set to `Qwen/Qwen3-Embedding-0.6B` (1024-dim normalized dense vector).
+   - Generates context-enriched embeddings (Title + Breadcrumbs + Step + Source + Content).
+2. **`QdrantVectorStore` (`backend/storage/qdrant_client.py`)**:
+   - Default vector size updated to `1024` for Qwen cosine similarity collections.
+3. **`test_pipeline.py` (`backend/ingestion/tests/test_pipeline.py`)**:
+   - Validated 1024-dimensional Qwen embeddings and RBAC pre-filtered vector retrieval.
+
+### Files Modified:
+- [`backend/ingestion/embedder.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/ingestion/embedder.py)
+- [`backend/storage/qdrant_client.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/storage/qdrant_client.py)
+- [`.env.example`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/.env.example)
+- [`backend/ingestion/tests/test_pipeline.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/ingestion/tests/test_pipeline.py)
+
+### Next Step:
+- Phase 3: BM25 Keyword Search Index (`backend/storage/bm25_index.py`).
