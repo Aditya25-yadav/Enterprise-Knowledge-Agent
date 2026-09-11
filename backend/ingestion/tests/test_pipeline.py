@@ -10,6 +10,19 @@ Validates:
 
 from __future__ import annotations
 
+import os
+import sys
+from pathlib import Path
+
+# Ensure project root is in sys.path
+for _parent in Path(__file__).resolve().parents:
+    if (_parent / "backend").is_dir():
+        if str(_parent) not in sys.path:
+            sys.path.insert(0, str(_parent))
+        break
+
+os.environ.setdefault("HF_HUB_OFFLINE", "1")
+
 import unittest
 from backend.ingestion.embedder import LocalEmbedder
 from backend.ingestion.pipeline import IngestionPipeline

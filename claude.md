@@ -924,3 +924,13 @@ This document maintains a chronological record of all architectural decisions, c
 
 ### Files Created:
 - [`docs/verify_phase2.md`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/docs/verify_phase2.md)
+
+## Step 47: Added Dynamic `sys.path` Bootstrap to Test Suites
+- **Date:** 2026-09-11
+- **Time:** 22:31 IST
+- **Purpose:** Added dynamic `sys.path` parent search bootstrap across test files (`test_smart_chunker.py`, `test_pipeline.py`, `test_bm25_index.py`), preventing `ModuleNotFoundError: No module named 'backend'` when tests are run directly or from varying subdirectories.
+
+### Files Modified:
+- [`backend/ingestion/tests/test_smart_chunker.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/ingestion/tests/test_smart_chunker.py)
+- [`backend/ingestion/tests/test_pipeline.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/ingestion/tests/test_pipeline.py)
+- [`backend/storage/tests/test_bm25_index.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/storage/tests/test_bm25_index.py)
