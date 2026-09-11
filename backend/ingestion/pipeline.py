@@ -80,17 +80,6 @@ class IngestionPipeline:
         # Step 3: Vector Store Upsert (Qdrant)
         points_upserted = self.vector_store.upsert_chunks(chunk_vector_pairs)
 
-        # Step 4: Keyword Indexing (BM25)
-        bm25_chunks_indexed = self.bm25_index.add_chunks(chunks)
-
-        # Step 4: Keyword Indexing (BM25)
-        bm25_chunks_indexed = self.bm25_index.add_chunks(chunks)
-        if getattr(self.bm25_index, "index_path", None):
-            try:
-                self.bm25_index.save_to_disk()
-            except Exception:
-                pass
-
         elapsed = round(time.time() - t0, 3)
         return {
             "resource_id": concept.resource or concept.title,
