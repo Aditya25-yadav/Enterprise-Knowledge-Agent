@@ -1,0 +1,128 @@
+"""
+Agent Tool Registry & Definitions for Enterprise Knowledge Retrieval.
+
+Defines schemas and execution handlers for retrieval tools invoked by the
+Agent Planner (LLM) during reasoning.
+"""
+
+from __future__ import annotations
+
+import json
+from typing import Any, Callable, Dict, List, Optional
+
+from backend.llm.base import ToolDefinition
+from backend.retrieval.semantic import SemanticRetriever
+
+
+class ToolRegistry:
+    """
+    Registry that manages tool definitions and their execution handlers.
+    """
+
+    def __init__(self) -> None:
+        self._tools: Dict[str, ToolDefinition] = {}
+        self._handlers: Dict[str, Callable[..., Any]] = {}
+
+    def register(
+        self,
+        definition: ToolDefinition,
+        handler: Callable[..., Any],
+    ) -> None:
+        """Registers a tool definition and its runtime callable handler."""
+        self._tools[definition.name] = definition
+        self._handlers[definition.name] = handler
+
+    def get_definitions(self) -> List[ToolDefinition]:
+        """Returns list of ToolDefinitions to pass to the LLM."""
+        return list(self._tools.values())
+
+    def execute(
+        self,
+        tool_name: str,
+        arguments: Dict[str, Any],
+        user_context: Optional[Dict[str, Any]] = None,
+    ) -> Any:
+        """
+        Executes the registered handler for the given tool name, passing arguments
+        and user security context (roles, user_id, groups).
+        """
+        if tool_name not in self._handlers:
+            return {
+                "error": f"Tool '{tool_name}' not found. Available tools: {list(self._tools.keys())}"
+            }
+
+        handler = self._handlers[tool_name]
+        try:
+            # Pass user_context if the handler accepts it
+            return handler(arguments=arguments, user_context=user_context or {})
+        except TypeError:
+            # Fallback if handler only takes arguments
+            return handler(**arguments)
+
+
+def create_default_tool_registry(
+    semantic_retriever: Optional[SemanticRetriever] = None,
+) -> ToolRegistry:
+    """
+    Creates and populates the standard ToolRegistry with enterprise retrieval tools.
+    """
+    registry = ToolRegistry()
+    retriever = semantic_retriever or SemanticRetriever()
+
+    # ── 1. Semantic Search Tool ──────────────────────────────────────────────
+    semantic_search_def = ToolDefinition(
+        name="semantic_search",
+        description=(
+            "Search the enterprise knowledge base for documents, architectural guides, setup steps, "
+            "runbooks, and repositories using semantic vector search. Use this tool for conceptual "
+            "questions, architecture explanations, setup procedures, and policy inquiries."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Natural language query describing the concepts, topics, or instructions to find.",
+                },
+                "source": {
+                    "type": "string",
+                    "description": "Optional filter by platform: 'github', 'notion', 'dropbox', 'gmail', 'slack'.",
+                    "enum": ["github", "notion", "dropbox", "gmail", "slack"],
+                },
+                "resource_type": {
+                    "type": "string",
+                    "description": "Optional filter by resource type: 'repository', 'file', 'issue', 'page', 'email', 'playbook'.",
+                },
+                "top_k": {
+                    "type": "integer",
+                    "description": "Maximum number of relevant chunks to retrieve (default: 5).",
+                    "default": 5,
+                },
+            },
+            "required": ["query"],
+        },
+    )
+
+    def handle_semantic_search(arguments: Dict[str, Any], user_context: Dict[str, Any]) -> List[Dict[str, Any]]:
+        query = arguments.get("query", "")
+        top_k = arguments.get("top_k", 5)
+        source = arguments.get("source")
+        resource_type = arguments.get("resource_type")
+
+        user_roles = user_context.get("roles") or user_context.get("allowed_roles")
+        user_id = user_context.get("user_id")
+        user_groups = user_context.get("groups")
+
+        results = retriever.search(
+            query=query,
+            top_k=top_k,
+            user_roles=user_roles,
+            user_id=user_id,
+            user_groups=user_groups,
+            source=source,
+            resource_type=resource_type,
+        )
+        return results
+
+    registry.register(semantic_search_def, handle_semantic_search)
+    return registry

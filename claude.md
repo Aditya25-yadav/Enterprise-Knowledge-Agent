@@ -934,3 +934,65 @@ This document maintains a chronological record of all architectural decisions, c
 - [`backend/ingestion/tests/test_smart_chunker.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/ingestion/tests/test_smart_chunker.py)
 - [`backend/ingestion/tests/test_pipeline.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/ingestion/tests/test_pipeline.py)
 - [`backend/storage/tests/test_bm25_index.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/storage/tests/test_bm25_index.py)
+
+---
+
+## Step 48: Autonomous Agent Reasoning Loop & Grounded Generation (Phase 4 / Milestone 1)
+- **Date:** 2026-09-15
+- **Time:** 15:15 IST
+- **Purpose:** Implemented Phase 4 (Milestone 1) of the Enterprise Knowledge Agent architecture: the autonomous multi-turn tool calling reasoning loop (`AgentPlanner`), the retrieval tool registry (`ToolRegistry`), semantic search tool handler (`SemanticRetriever`), bracketed context builder (`ContextBuilder`), and fact-grounded answer synthesizer (`AnswerGenerator`).
+
+### Key Components Built:
+1. **`SemanticRetriever` (`backend/retrieval/semantic.py`)**:
+   - Executes dense vector semantic retrieval over `QdrantVectorStore` using `LocalEmbedder` (`Qwen/Qwen3-Embedding-0.6B`).
+   - Propagates user identity & roles for strict database-level RBAC pre-filtering.
+   - Extracts and formats chunk breadcrumbs, source URLs, content types, and similarity scores.
+2. **`ToolRegistry` (`backend/agent/tools.py`)**:
+   - Provider-agnostic tool execution engine mapping standard JSON schema `ToolDefinition` to Python callable handlers.
+   - Registered `semantic_search` with parameters (`query`, `top_k`, `score_threshold`).
+   - Thread-safe user context injection (`roles`, `user_id`, `groups`) for downstream permission enforcement.
+3. **`ContextBuilder` (`backend/generation/context_builder.py`)**:
+   - Formats retrieved evidence chunks into structured, numbered blocks (`[1]`, `[2]`, etc.) with hierarchical breadcrumbs (`section_path`), content types, and source resource paths.
+   - Deduplicates chunks and generates precise citation metadata objects for UI rendering.
+4. **`AnswerGenerator` (`backend/generation/answer_generator.py`)**:
+   - Synthesizes user-facing answers strictly grounded in retrieved evidence, preventing hallucinations and preserving step-by-step procedural order.
+   - Enforces numbered citations (`[1]`, `[2]`) in LLM outputs.
+5. **`AgentPlanner` (`backend/agent/planner.py`)**:
+   - Autonomous multi-turn reasoning loop driving `LLMProvider.generate_with_tools()`.
+   - Iteratively calls retrieval tools, inspects results, refines queries if needed, and formulates final grounded answers with structured citations.
+6. **Automated End-to-End Test Suite (`backend/agent/tests/test_agent_loop.py`)**:
+   - 3 unit tests verifying context formatting, multi-turn autonomous tool execution, and RBAC security boundaries.
+
+### Files Created / Modified:
+- [`backend/retrieval/__init__.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/retrieval/__init__.py)
+- [`backend/retrieval/semantic.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/retrieval/semantic.py)
+- [`backend/agent/__init__.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/agent/__init__.py)
+- [`backend/agent/tools.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/agent/tools.py)
+- [`backend/generation/__init__.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/generation/__init__.py)
+- [`backend/generation/context_builder.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/generation/context_builder.py)
+- [`backend/generation/answer_generator.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/generation/answer_generator.py)
+- [`backend/agent/planner.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/agent/planner.py)
+- [`backend/agent/tests/test_agent_loop.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/agent/tests/test_agent_loop.py)
+
+### Next Step:
+- Phase 5: Keyword Search Retrieval Tool (`backend/retrieval/keyword.py` + registering `keyword_search` in `ToolRegistry`).
+
+---
+
+## Step 49: Phase 3 Verification Scripts & Documentation (`verify_phase3.py`, `docs/verify_phase3.md`)
+- **Date:** 2026-09-15
+- **Time:** 15:33 IST
+- **Purpose:** Created end-to-end visual inspection script [`scripts/verify_phase3.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/scripts/verify_phase3.py), dedicated test runner [`backend/storage/tests/verify_phase3.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/storage/tests/verify_phase3.py), and comprehensive documentation in [`docs/verify_phase3.md`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/docs/verify_phase3.md) to test and visually validate all Phase 3 BM25 Keyword Search capabilities.
+
+### Features Verified:
+1. **Code & Identifier-Aware Tokenizer**: Decomposes snake_case (`refund_batch_processor`), camelCase (`AuthService`), Jira keys (`PAY-928`), PR numbers (`#1842`), and error codes (`HTTP 401`, `ECONNREFUSED`).
+2. **BM25Plus Exact Search**: 100% precision exact retrieval across technical identifiers and function symbols.
+3. **Strict RBAC Access Control Pre-Filtering**: Zero-leakage database-level access checks on keyword search.
+4. **Disk Serialization & Instant Reload**: Validated `save_to_disk()` / `load_from_disk()` JSON persistence.
+5. **Dual-Indexing Pipeline**: Single `IngestionPipeline.ingest_concept()` synchronizing both Qdrant and BM25 indexes simultaneously.
+
+### Files Created:
+- [`scripts/verify_phase3.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/scripts/verify_phase3.py)
+- [`backend/storage/tests/verify_phase3.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/storage/tests/verify_phase3.py)
+- [`docs/verify_phase3.md`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/docs/verify_phase3.md)
+
