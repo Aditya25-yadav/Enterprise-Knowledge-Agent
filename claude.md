@@ -642,6 +642,32 @@ This document maintains a chronological record of all architectural decisions, c
 
 ---
 
+## Step 38: Confluence Connector (Client, Storage-Format Parser, OKF Bundle)
+- **Date:** 2026-09-05
+- **Time:** 10:59:01 IST
+- **Purpose:** Add Atlassian Confluence as a full enterprise knowledge source with a REST v1 client, Storage-Format (XHTML) → semantic block normalization, a `BaseConnector`-conformant orchestrator, and end-to-end OKF v0.2 Knowledge Bundle generation.
+
+### Key Decisions & Rationale:
+1. **Confluence REST v1 + Basic Auth**: `ConfluenceClient` uses `CONFLUENCE_URL`, `CONFLUENCE_USERNAME`, `CONFLUENCE_API_TOKEN`; automatically appends `/wiki` when the base URL lacks it (Cloud default), verifies via `GET /rest/api/user/current`, and paginates with `_links.next` URLs (no cursors).
+2. **Storage-Format DOM → Semantic Blocks**: `parser.py` builds a lightweight `html.parser` element tree that preserves **document order** (text segments interleaved with child nodes). Converts headings, paragraphs, bullet/numbered lists with nested children, code blocks, blockquotes, and dividers; tables become structured `DATABASE` blocks with columns + rows; inline links render as `Text (https://...)`; images/media/macros are ignored via an explicit ignore-list; `ac:structured-macro` panels flatten to inner text.
+3. **Dual Discovery Paths**: `load_documents()` supports `space_keys` (specific spaces) or auto-discovery of all spaces; `--include-spaces` optionally emits space-level overview documents.
+4. **Robust URL Joining**: `_join_page_url()` prevents the double-`/wiki` bug when both `_links.base` and `_links.webui` carry the `/wiki` prefix.
+5. **No New Dependencies**: Everything uses `requests` + stdlib `html.parser`; `requirements.txt` unchanged.
+
+### Files Created / Modified:
+- [`backend/connectors/confluence/client.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/connectors/confluence/client.py) (Created)
+- [`backend/connectors/confluence/parser.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/connectors/confluence/parser.py) (Created)
+- [`backend/connectors/confluence/connector.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/connectors/confluence/connector.py) (Created)
+- [`backend/connectors/confluence/__init__.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/connectors/confluence/__init__.py) (Created)
+- [`backend/connectors/confluence/tests/test_run_connector.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/connectors/confluence/tests/test_run_connector.py) (Created)
+- [`backend/connectors/confluence/tests/test_run_okf.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/connectors/confluence/tests/test_run_okf.py) (Created)
+- [`backend/connectors/confluence/tests/README.md`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/connectors/confluence/tests/README.md) (Created)
+- [`backend/connectors/__init__.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/connectors/__init__.py) (Updated exports)
+- [`DOCUMENTS.md`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/DOCUMENTS.md) (Updated Atlassian API references)
+- [`RESEARCH.md`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/RESEARCH.md) (Updated Confluence research section)
+
+---
+
 ## Step 39: Jira Connector (Client, ADF Parser, OKF Bundle)
 - **Date:** 2026-09-05
 - **Time:** 10:59:01 IST
