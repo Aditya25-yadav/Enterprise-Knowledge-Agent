@@ -1097,6 +1097,23 @@ This document maintains a chronological record of all architectural decisions, c
 - [`backend/agent/__init__.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/agent/__init__.py)
 - [`backend/agent/tests/test_langgraph_agent.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/agent/tests/test_langgraph_agent.py)
 
+---
+
+## Step 56: Appended Future Improvements to Project Notes (`docs/NOTES.md`)
+- **Date:** 2026-09-20
+- **Time:** 23:42 IST
+- **Purpose:** Added architectural notes and future improvements to `docs/NOTES.md` regarding LangGraph multi-tool execution concurrency.
+
+### Key Topics Documented:
+1. **Concurrent vs. Sequential Multi-Tool Execution in LangGraph**:
+   - Documented the current design where the LLM plans multi-tool calls in a single turn and `_tool_node()` executes them sequentially in `< 5ms` with local Qdrant/BM25.
+   - Outlined future upgrade path using `asyncio.gather` or `ThreadPoolExecutor` for remote HTTP APIs / network-bound connectors.
+
+### Files Modified:
+- [`docs/NOTES.md`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/docs/NOTES.md)
+
+
+
 
 
 

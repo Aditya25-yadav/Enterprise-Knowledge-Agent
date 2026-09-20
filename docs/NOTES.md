@@ -5,3 +5,4 @@
 3. PDF, Word (.docx), and Excel (.xlsx) parsing is COMPLETED and operational! Remaining for Dropbox / Drive: media files (audio/video) and image OCR.
 4. For dropbox, in word docx, the tables are collected and printed at the end together, check that later.
 5. In pdfs, docx, images arent handed as of now.
+6. LangGraph Multi-Tool Execution: Currently, logical multi-tool planning runs sequentially inside `_tool_node()` via a `for` loop because local Qdrant/BM25 lookups take < 5ms. In the future when integrating remote HTTP APIs or high-latency network connectors, upgrade `_tool_node()` to use `ThreadPoolExecutor` or `asyncio.gather()` for true concurrent network I/O.
