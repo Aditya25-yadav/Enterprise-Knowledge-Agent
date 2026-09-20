@@ -260,8 +260,8 @@ def test_section_5_dual_indexing_pipeline():
 
     embedder = LocalEmbedder()
     vector_store = QdrantVectorStore(mode="memory", collection_name="test_dual_indexing")
-    bm25 = BM25Index(index_path="./data/test_dual_bm25.json")
-    bm25.clear()
+    # Use default index path ./data/bm25_index.json
+    bm25 = BM25Index(index_path="./data/bm25_index.json")
 
     pipeline = IngestionPipeline(
         embedder=embedder,
@@ -302,8 +302,12 @@ Listen for `refund.settled` event with payload verification.
     assert len(qdrant_res) > 0
     print(f"  -> ✅ Found via Qdrant Vector Store: '{qdrant_res[0]['title']}' (Score: {qdrant_res[0]['score']:.4f})")
 
-    # Cleanup
-    bm25.clear()
+    # Ensure saved to disk
+    bm25.save_to_disk()
+    disk_path = Path(bm25.index_path).resolve()
+    print(f"\n💾 Disk Persistence: BM25 index file successfully written to disk!")
+    print(f"   -> Location: {disk_path}")
+    print(f"   -> File Size: {os.path.getsize(disk_path)} bytes")
     print("\n✅ Dual-indexing validated: Dense vector semantic search & sparse lexical search stay 100% in sync!")
 
 

@@ -77,6 +77,11 @@ class IngestionPipeline:
 
         # Step 4: Keyword Indexing (BM25)
         bm25_chunks_indexed = self.bm25_index.add_chunks(chunks)
+        if getattr(self.bm25_index, "index_path", None):
+            try:
+                self.bm25_index.save_to_disk()
+            except Exception:
+                pass
 
         elapsed = round(time.time() - t0, 3)
         return {

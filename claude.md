@@ -996,3 +996,110 @@ This document maintains a chronological record of all architectural decisions, c
 - [`backend/storage/tests/verify_phase3.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/storage/tests/verify_phase3.py)
 - [`docs/verify_phase3.md`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/docs/verify_phase3.md)
 
+---
+
+## Step 50: IngestionPipeline BM25 Auto-Persistence to `./data/bm25_index.json`
+- **Date:** 2026-09-15
+- **Time:** 18:24 IST
+- **Purpose:** Configured `IngestionPipeline` and `verify_phase3.py` to automatically serialize the BM25 lexical index to disk at `./data/bm25_index.json` upon document ingestion, enabling persistent inspection of indexed chunks, tokenized corpus, and RBAC metadata.
+
+### Files Modified:
+- [`backend/ingestion/pipeline.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/ingestion/pipeline.py)
+- [`scripts/verify_phase3.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/scripts/verify_phase3.py)
+
+---
+
+## Step 51: Phase 4 Verification Scripts & Documentation (`verify_phase4.py`, `docs/verify_phase4.md`)
+- **Date:** 2026-09-15
+- **Time:** 18:31 IST
+- **Purpose:** Created end-to-end visual inspection script [`scripts/verify_phase4.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/scripts/verify_phase4.py), dedicated test runner [`backend/agent/tests/verify_phase4.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/agent/tests/verify_phase4.py), and comprehensive documentation in [`docs/verify_phase4.md`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/docs/verify_phase4.md) to test and visually validate all Phase 4 (Milestone 1) Agent Reasoning & Semantic Tool capabilities.
+
+### Features Verified:
+1. **`SemanticRetriever`**: Dense vector semantic retrieval over Qdrant with local Qwen embeddings and strict RBAC pre-filtering.
+2. **`ContextBuilder`**: Formats evidence chunks into structured, bracketed references `[1]`, `[2]` with hierarchical breadcrumbs and citation cards.
+3. **`ToolRegistry`**: Dynamic tool registration, JSON schema generation, and RBAC security context injection.
+4. **`AnswerGenerator`**: Fact-grounded generation preventing hallucinations and enforcing bracketed source citations.
+5. **`AgentPlanner`**: Autonomous multi-turn reasoning loop (User $\rightarrow$ Tool Call $\rightarrow$ Tool Execution $\rightarrow$ Result Feedback $\rightarrow$ Final Grounded Answer).
+
+### Files Created / Modified:
+- [`scripts/verify_phase4.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/scripts/verify_phase4.py)
+- [`backend/agent/tests/verify_phase4.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/agent/tests/verify_phase4.py)
+- [`docs/verify_phase4.md`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/docs/verify_phase4.md)
+- [`backend/retrieval/semantic.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/retrieval/semantic.py)
+- [`backend/generation/context_builder.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/generation/context_builder.py)
+
+---
+
+## Step 52: Excluded Local Data & Storage Artifacts in `.gitignore`
+- **Date:** 2026-09-15
+- **Time:** 18:37 IST
+- **Purpose:** Added `data/`, `**/data/`, `*.qdrant`, and `bm25_index.json` to `.gitignore` to prevent local vector database storage files, SQLite databases, and BM25 index JSON files from being tracked in Git.
+
+### Files Modified:
+- [`.gitignore`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/.gitignore)
+
+---
+
+## Step 53: Preserved 100% Payload Metadata in Semantic Vector Retrieval
+- **Date:** 2026-09-15
+- **Time:** 18:57 IST
+- **Purpose:** Upgraded `SemanticRetriever.search()` result formatting to retain all underlying Qdrant payload fields (including `parent_id`, `chunk_index`, `total_chunks`, `created_at`, `updated_at`, `permissions`, and `point_id`), ensuring zero structural or security metadata is lost for downstream Small-to-Large expansion, recency scoring, and provenance tracking.
+
+### Files Modified:
+- [`backend/retrieval/semantic.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/retrieval/semantic.py)
+- [`backend/generation/context_builder.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/generation/context_builder.py)
+
+---
+
+## Step 54: LangGraph State Machine Integration for Phase 4 Agent Loop
+- **Date:** 2026-09-15
+- **Time:** 19:15 IST
+- **Purpose:** Integrated `langgraph` and `langchain-core` as the stateful orchestration engine for the Phase 4 Agent Reasoning Loop (`LangGraphAgentPlanner`), defining a compiled `StateGraph` with explicit nodes (`reasoner`, `tool_node`, `generator`), conditional routing edges, and strict RBAC context propagation through typed `AgentState`.
+
+### Key Components Built:
+1. **`AgentState` (`backend/agent/state.py`)**:
+   - Typed state dictionary managing `query`, `user_context`, `messages` (with LangGraph `add_messages` reducer), `retrieved_chunks`, `citations`, `answer`, and `turn_count`.
+2. **`LangGraphAgentPlanner` (`backend/agent/langgraph_planner.py`)**:
+   - Stateful compiled `StateGraph` coordinating:
+     - `reasoner`: Evaluates conversation state and available tools via `LLMProvider.generate_with_tools()`.
+     - `_should_continue`: Conditional routing edge checking for `tool_calls` vs direct completion.
+     - `tool_node`: Executes retrieval tools in `ToolRegistry` with user security context (`roles`, `user_id`, `groups`) and accumulates evidence chunks.
+     - `generator`: Synthesizes final grounded answer with numbered citations via `AnswerGenerator`.
+3. **Automated Test Suite (`backend/agent/tests/test_langgraph_agent.py`)**:
+   - 3 unit tests verifying graph compilation, multi-turn state transitions, and RBAC isolation.
+4. **Verification Script & Docs**:
+   - Added Section 6 to [`scripts/verify_phase4.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/scripts/verify_phase4.py) and updated [`scripts/verify_phase4.md`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/scripts/verify_phase4.md).
+
+### Files Created / Modified:
+- [`backend/agent/state.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/agent/state.py)
+- [`backend/agent/langgraph_planner.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/agent/langgraph_planner.py)
+- [`backend/agent/__init__.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/agent/__init__.py)
+- [`backend/agent/tests/test_langgraph_agent.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/agent/tests/test_langgraph_agent.py)
+- [`scripts/verify_phase4.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/scripts/verify_phase4.py)
+- [`scripts/verify_phase4.md`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/scripts/verify_phase4.md)
+- [`requirements.txt`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/requirements.txt)
+
+---
+
+## Step 55: LangChain-Native Retrieval Tools & Pydantic Schemas (`backend/agent/langchain_tools.py`)
+- **Date:** 2026-09-15
+- **Time:** 19:27 IST
+- **Purpose:** Implemented native LangChain `@tool` / `StructuredTool` definitions and Pydantic argument schemas (`SemanticSearchInput`, `KeywordSearchInput`, `ResourceLookupInput`) with RBAC security binding in `backend/agent/langchain_tools.py`, enabling direct execution in standard LangGraph `ToolNode` instances.
+
+### Key Features Built:
+1. **Pydantic Argument Validation**: Strongly-typed schemas validating queries, `top_k`, `source`, and `resource_type`.
+2. **`create_langchain_tools()`**: Factory constructing LangChain `BaseTool` instances bound to user security context (`roles`, `user_id`, `groups`).
+3. **`convert_registry_to_langchain_tools()`**: Bidirectional bridge converting our internal `ToolRegistry` into standard LangChain tools.
+4. **Validation Test**: Added `test_04_native_langchain_tools_execution` in `backend/agent/tests/test_langgraph_agent.py` (4/4 tests passing).
+
+### Files Created / Modified:
+- [`backend/agent/langchain_tools.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/agent/langchain_tools.py)
+- [`backend/agent/__init__.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/agent/__init__.py)
+- [`backend/agent/tests/test_langgraph_agent.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/agent/tests/test_langgraph_agent.py)
+
+
+
+
+
+
+

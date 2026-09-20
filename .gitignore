@@ -27,8 +27,13 @@ test_data/
 **/test_data/
 *.okf.md
 *.okf.json
+data/
+**/data/
+*.qdrant
+bm25_index.json
 
 # IDE / OS
 .DS_Store
 .vscode/
 .idea/
+

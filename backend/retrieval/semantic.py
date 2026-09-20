@@ -39,6 +39,7 @@ class SemanticRetriever:
         source: Optional[str] = None,
         resource_type: Optional[str] = None,
         expand_sequences: bool = True,
+        user_context: Optional[Dict[str, Any]] = None,
     ) -> List[Dict[str, Any]]:
         """
         Executes semantic vector search with RBAC pre-filtering and optional
@@ -46,6 +47,12 @@ class SemanticRetriever:
         """
         if not query or not query.strip():
             return []
+
+        # Unpack user_context if provided
+        if user_context:
+            user_roles = user_roles or user_context.get("roles") or user_context.get("allowed_roles")
+            user_id = user_id or user_context.get("user_id")
+            user_groups = user_groups or user_context.get("groups")
 
         # 1. Generate dense query embedding
         query_vector = self.embedder.embed_text(query)
@@ -64,26 +71,17 @@ class SemanticRetriever:
         if not results:
             return []
 
-        # 3. Format result objects
+        # 3. Format result objects (preserving 100% of payload metadata)
         formatted = []
         for r in results:
-            item = {
-                "chunk_id": r.get("chunk_id", ""),
-                "resource_id": r.get("resource_id", ""),
-                "source": r.get("source", "unknown"),
-                "resource_type": r.get("resource_type", "document"),
-                "title": r.get("title", "Untitled"),
-                "url": r.get("url", ""),
-                "text": r.get("text", ""),
-                "score": r.get("score", 0.0),
-                "section_path": r.get("section_path", []),
-                "section_heading": r.get("section_heading", ""),
-                "content_type": r.get("content_type", "general"),
-                "sequence": r.get("sequence"),
-                "prev_chunk_id": r.get("prev_chunk_id"),
-                "next_chunk_id": r.get("next_chunk_id"),
-                "extra_metadata": r.get("extra_metadata", {}),
-            }
+            item = dict(r)
+            item["score"] = float(r.get("score", 0.0))
+            item.setdefault("title", "Untitled")
+            item.setdefault("url", "")
+            item.setdefault("source", "unknown")
+            item.setdefault("content_type", "general")
+            item.setdefault("section_path", [])
+            item.setdefault("extra_metadata", {})
             formatted.append(item)
 
         return formatted

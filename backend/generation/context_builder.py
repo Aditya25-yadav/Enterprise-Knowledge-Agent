@@ -51,6 +51,7 @@ class ContextBuilder:
 
             citations.append({
                 "index": str(idx),
+                "citation_index": idx,
                 "source": source,
                 "title": title,
                 "url": url,
