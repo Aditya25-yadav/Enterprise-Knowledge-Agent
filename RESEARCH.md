@@ -2345,6 +2345,72 @@ The current Dropbox JavaScript SDK also explicitly supports access tokens, refre
 
 ---
 
+# Confluence Connector: From Pages to Knowledge
+
+## What is Confluence as a knowledge source?
+
+Atlassian Confluence is the enterprise wiki layer of the knowledge stack. It organizes
+high-signal documentation ("pages") into **spaces** (e.g. Engineering, Product, HR).
+Each page carries a Storage-Format XHTML body, a version history, and an ancestor chain
+that encodes the wiki hierarchy.
+
+## Confluence API model: discovery vs. retrieval
+
+- **Discovery** (`GET /rest/api/space` → `GET /rest/api/content?spaceKey=...`): find every
+  space and every page the token account can read. Confluence returns `_links.next` URLs,
+  not opaque cursors, for pagination.
+- **Retrieval** (`GET /rest/api/content/{id}?expand=body.storage,version,space,history,ancestors`):
+  fetch a full page with its rendered Storage-Format body, version metadata, space, creation
+  history, and the parent page chain in a single request.
+
+## What to extract and preserve
+
+1. **Space-level metadata** — space key/name define the knowledge domain boundary.
+2. **Page-level metadata** — title, space key, ancestor page IDs (hierarchy), version number,
+   created/last-edited timestamps, creator/editor.
+3. **Content structure** — the Storage-Format XHTML is *not* plain text: headings, paragraphs,
+   bullet/numbered lists (with nesting), tables (→ structured DATABASE records), code blocks,
+   blockquotes, and dividers must be preserved as semantic blocks.
+
+## Text vs. rich structure parsing
+
+Unlike Notion's JSON blocks, Confluence bodies arrive as storage XHTML. We parse the DOM
+with a lightweight `html.parser`-based tree builder that preserves **document order** (text
+segments interleaved with child elements). Inline tags (`strong`, `em`, `<a href>`, `<code>`)
+fold into readable text; links render as `Text (https://...)`; images/media/emoticons are
+ignored via an explicit ignore-list; `ac:structured-macro` panels flatten to their inner text.
+
+## Confluence connector processing layers
+
+### 1. Page-level information
+Title, space key, parent page, timestamps, version, and URL drive indexing and recency scoring.
+
+### 2. Content-level information
+Storage XHTML → semantic `ContentBlock`s: headings, paragraphs, lists with nested children,
+code blocks, quotes, and tables mapped to `DATABASE` blocks so tabular knowledge is retrievable.
+
+### 3. Preserve source information
+Every block carries the page ID, so downstream chunkers can cite `confluence://pages/{id}`.
+
+## Why separate fetch from normalization (again)
+
+The Confluence REST client handles paging, `/wiki` base-path detection, and Basic-auth;
+`parser.py` is a pure DOM→blocks converter. This keeps the network layer dumb and the
+normalization layer testable with static HTML fixtures.
+
+## Sync consideration
+
+`version.when` (last edit timestamp) drives incremental synchronization —
+re-ingest a page only when `version.when > last_synced_time`.
+
+### In one sentence
+
+**Confluence becomes a wiki knowledge source where spaces act as domain boundaries,
+ancestor chains as hierarchy, and Storage-Format bodies as semantic documents — with
+tables preserved as structured records rather than flattened text.**
+
+---
+
 # Jira Connector: From Issues to Knowledge
 
 ## What is Jira as a knowledge source?
