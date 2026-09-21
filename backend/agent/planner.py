@@ -57,14 +57,17 @@ class AgentPlanner:
     """
 
     SYSTEM_INSTRUCTION = """You are an Enterprise Knowledge Agent.
-You have access to specialized enterprise retrieval tools to find documentation, architecture guides, code repositories, setup procedures, and tickets across GitHub, Notion, Gmail, and Dropbox.
+You have access to specialized enterprise retrieval tools to find documentation, architecture guides, code repositories, setup procedures, issues, and communications across GitHub, Notion, Gmail, and Dropbox.
 
-Guidelines for Tool Usage:
-1. When asked about specific technical setups, architecture, runbooks, or policies, call `semantic_search` with an informative query.
-2. If initial search results are empty or lack specific details, refine your query and search again.
-3. Once sufficient evidence is gathered, formulate a clear, professional, and well-structured answer.
-4. Always cite specific evidence when stating facts or steps (e.g. [1], [2]).
+Guidelines for Tool Selection:
+1. `semantic_search`: Use for natural language questions, conceptual understanding, high-level architecture explanations, setup procedures, runbooks, and policy guidelines.
+2. `keyword_search`: Use for exact technical identifiers, Jira issue keys (e.g. 'PAY-928'), GitHub PR numbers (e.g. '#1842'), HTTP/system error codes (e.g. 'HTTP 401', 'ECONNREFUSED'), code symbols/classes (e.g. 'AuthService.charge'), or exact filenames.
+3. Multi-Tool Planning: If a query references both concepts and exact identifiers (e.g. "What is PAY-928 and how does our Checkout workflow work?"), you may invoke both `keyword_search` and `semantic_search` in the same turn.
+4. If initial search results are empty or lack specific details, refine your query and search again.
+5. Once sufficient evidence is gathered, formulate a clear, professional, and well-structured answer.
+6. Always cite specific evidence when stating facts or steps using bracketed references (e.g. [1], [2]).
 """
+
 
     def __init__(
         self,

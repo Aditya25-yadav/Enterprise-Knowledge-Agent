@@ -17,6 +17,7 @@ from langchain_core.tools import BaseTool, StructuredTool, tool
 from pydantic import BaseModel, Field
 
 from backend.agent.tools import ToolRegistry
+from backend.retrieval.keyword import KeywordRetriever
 from backend.retrieval.semantic import SemanticRetriever
 from backend.storage.bm25_index import BM25Index
 
@@ -55,6 +56,10 @@ class KeywordSearchInput(BaseModel):
         default=None,
         description="Optional filter by platform: 'github', 'notion', 'dropbox', 'gmail', 'slack'."
     )
+    resource_type: Optional[str] = Field(
+        default=None,
+        description="Optional filter by resource type: 'repository', 'file', 'issue', 'page', 'email', 'playbook'."
+    )
 
 
 class ResourceLookupInput(BaseModel):
@@ -68,6 +73,7 @@ class ResourceLookupInput(BaseModel):
 
 def create_langchain_tools(
     semantic_retriever: Optional[SemanticRetriever] = None,
+    keyword_retriever: Optional[KeywordRetriever] = None,
     bm25_index: Optional[BM25Index] = None,
     user_context: Optional[Dict[str, Any]] = None,
 ) -> List[BaseTool]:
@@ -75,11 +81,11 @@ def create_langchain_tools(
     Creates standard LangChain BaseTool instances with bound RBAC security context.
     
     Can be passed directly into LangGraph's ToolNode:
-        tools = create_langchain_tools(semantic_retriever, bm25_index, user_context)
+        tools = create_langchain_tools(semantic_retriever, keyword_retriever, user_context)
         tool_node = ToolNode(tools)
     """
     retriever = semantic_retriever or SemanticRetriever()
-    keyword_index = bm25_index or BM25Index()
+    kw_retriever = keyword_retriever or KeywordRetriever(bm25_index=bm25_index)
     ctx = user_context or {"roles": ["employee"], "user_id": "user@enterprise.com", "groups": []}
 
     user_roles = ctx.get("roles") or ctx.get("allowed_roles")
@@ -107,14 +113,16 @@ def create_langchain_tools(
         query: str,
         top_k: int = 5,
         source: Optional[str] = None,
+        resource_type: Optional[str] = None,
     ) -> str:
-        results = keyword_index.search(
+        results = kw_retriever.search(
             query=query,
             top_k=top_k,
             user_roles=user_roles,
             user_id=user_id,
             user_groups=user_groups,
             source=source,
+            resource_type=resource_type,
         )
         return json.dumps(results, ensure_ascii=False)
 
@@ -139,6 +147,7 @@ def create_langchain_tools(
     )
 
     return [semantic_tool, keyword_tool]
+
 
 
 def convert_registry_to_langchain_tools(

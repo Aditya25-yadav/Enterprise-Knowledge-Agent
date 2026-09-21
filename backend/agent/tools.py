@@ -11,6 +11,7 @@ import json
 from typing import Any, Callable, Dict, List, Optional
 
 from backend.llm.base import ToolDefinition
+from backend.retrieval.keyword import KeywordRetriever
 from backend.retrieval.semantic import SemanticRetriever
 
 
@@ -62,12 +63,15 @@ class ToolRegistry:
 
 def create_default_tool_registry(
     semantic_retriever: Optional[SemanticRetriever] = None,
+    keyword_retriever: Optional[KeywordRetriever] = None,
 ) -> ToolRegistry:
     """
-    Creates and populates the standard ToolRegistry with enterprise retrieval tools.
+    Creates and populates the standard ToolRegistry with enterprise retrieval tools
+    including both dense semantic search and sparse BM25 keyword search.
     """
     registry = ToolRegistry()
-    retriever = semantic_retriever or SemanticRetriever()
+    sem_retriever = semantic_retriever or SemanticRetriever()
+    kw_retriever = keyword_retriever or KeywordRetriever()
 
     # ── 1. Semantic Search Tool ──────────────────────────────────────────────
     semantic_search_def = ToolDefinition(
@@ -109,20 +113,63 @@ def create_default_tool_registry(
         source = arguments.get("source")
         resource_type = arguments.get("resource_type")
 
-        user_roles = user_context.get("roles") or user_context.get("allowed_roles")
-        user_id = user_context.get("user_id")
-        user_groups = user_context.get("groups")
-
-        results = retriever.search(
+        return sem_retriever.search(
             query=query,
             top_k=top_k,
-            user_roles=user_roles,
-            user_id=user_id,
-            user_groups=user_groups,
             source=source,
             resource_type=resource_type,
+            user_context=user_context,
         )
-        return results
+
+    # ── 2. Keyword Search Tool (BM25) ─────────────────────────────────────────
+    keyword_search_def = ToolDefinition(
+        name="keyword_search",
+        description=(
+            "Search for exact technical identifiers: Jira issue keys (e.g. 'PAY-928'), GitHub PR numbers "
+            "(e.g. '#1842'), HTTP error codes ('HTTP 401', 'ECONNREFUSED'), symbol names "
+            "('AuthService.charge'), or specific filenames using BM25+ keyword search."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Exact identifier, ticket key, error code, symbol name, or filename to find.",
+                },
+                "source": {
+                    "type": "string",
+                    "description": "Optional filter by platform: 'github', 'notion', 'dropbox', 'gmail', 'slack'.",
+                    "enum": ["github", "notion", "dropbox", "gmail", "slack"],
+                },
+                "resource_type": {
+                    "type": "string",
+                    "description": "Optional filter by resource type: 'repository', 'file', 'issue', 'page', 'email', 'playbook'.",
+                },
+                "top_k": {
+                    "type": "integer",
+                    "description": "Maximum number of matching chunks to retrieve (default: 5).",
+                    "default": 5,
+                },
+            },
+            "required": ["query"],
+        },
+    )
+
+    def handle_keyword_search(arguments: Dict[str, Any], user_context: Dict[str, Any]) -> List[Dict[str, Any]]:
+        query = arguments.get("query", "")
+        top_k = arguments.get("top_k", 5)
+        source = arguments.get("source")
+        resource_type = arguments.get("resource_type")
+
+        return kw_retriever.search(
+            query=query,
+            top_k=top_k,
+            source=source,
+            resource_type=resource_type,
+            user_context=user_context,
+        )
 
     registry.register(semantic_search_def, handle_semantic_search)
+    registry.register(keyword_search_def, handle_keyword_search)
     return registry
+

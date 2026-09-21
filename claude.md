@@ -1112,6 +1112,96 @@ This document maintains a chronological record of all architectural decisions, c
 ### Files Modified:
 - [`docs/NOTES.md`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/docs/NOTES.md)
 
+---
+
+## Step 57: Implemented `KeywordRetriever` (`backend/retrieval/keyword.py`)
+- **Date:** 2026-09-21
+- **Time:** 00:21 IST
+- **Purpose:** Created the lexical retrieval layer (`KeywordRetriever`) wrapping `BM25Index` to provide fast, exact identifier/symbol search (e.g. `PAY-928`, `HTTP 401`, `AuthService.charge`), database-level RBAC pre-filtering, and 100% payload metadata preservation.
+
+### Key Features:
+1. **RBAC Context Handling**: Directly accepts and unpacks `user_context` (`roles`, `user_id`, `groups`) for thread-safe database-level pre-filtering.
+2. **Metadata Integrity**: Returns structured chunk dictionaries matching `SemanticRetriever` format (`chunk_id`, `score`, `title`, `url`, `source`, `content_type`, `section_path`, `extra_metadata`).
+3. **Identifier Matching**: Leverages BM25+ tokenization to index symbols and kebab/snake-case identifiers.
+
+### Files Created / Modified:
+- [`backend/retrieval/keyword.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/retrieval/keyword.py)
+- [`backend/retrieval/__init__.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/retrieval/__init__.py)
+
+---
+
+## Step 58: Registered `keyword_search` Tool in `ToolRegistry` & `langchain_tools.py`
+- **Date:** 2026-09-21
+- **Time:** 00:24 IST
+- **Purpose:** Registered `keyword_search` with its full JSON schema parameter specification in `ToolRegistry`, updated `create_default_tool_registry()` to initialize both semantic and keyword retrievers, and updated `backend/agent/langchain_tools.py` with native LangChain `@tool` / `StructuredTool` definitions and Pydantic input schemas (`KeywordSearchInput`).
+
+### Key Features:
+1. **`ToolRegistry` Dual Registration**: `create_default_tool_registry()` now equips the agent with both `semantic_search` (dense vector) and `keyword_search` (sparse BM25+).
+2. **LangChain Tool Integration**: `create_langchain_tools()` now accepts `KeywordRetriever` and provides `keyword_search` structured tool with `resource_type` and `source` filtering.
+3. **Security Context Propagation**: Both tool execution handlers forward `user_context` directly to enforce database-level RBAC filtering.
+
+### Files Modified:
+- [`backend/agent/tools.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/agent/tools.py)
+- [`backend/agent/langchain_tools.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/agent/langchain_tools.py)
+
+---
+
+## Step 59: Upgraded Multi-Tool Reasoner Prompting in `LangGraphAgentPlanner` & `AgentPlanner`
+- **Date:** 2026-09-21
+- **Time:** 00:26 IST
+- **Purpose:** Enhanced the core `SYSTEM_INSTRUCTION` across both `LangGraphAgentPlanner` and `AgentPlanner` to explicitly guide the LLM on distinguishing when to call `semantic_search` (conceptual/procedural queries), `keyword_search` (exact IDs, tickets, error codes, symbols), or both in parallel during multi-tool queries.
+
+### Key Instructions Added:
+1. **Semantic Search Trigger**: Natural language questions, architecture explanations, runbooks, and policies.
+2. **Keyword Search Trigger**: Exact Jira keys (`PAY-928`), PR numbers (`#1842`), error codes (`HTTP 401`), symbol names (`AuthService.charge`), or exact filenames.
+3. **Multi-Tool Planning**: Explicit permission to issue both `keyword_search` and `semantic_search` within the same turn for composite queries.
+
+### Files Modified:
+- [`backend/agent/langgraph_planner.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/agent/langgraph_planner.py)
+- [`backend/agent/planner.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/agent/planner.py)
+
+---
+
+## Step 60: Implemented Phase 5 Unit Test Suite (`test_keyword_retriever.py` & Multi-Tool LangGraph Tests)
+- **Date:** 2026-09-21
+- **Time:** 00:28 IST
+- **Purpose:** Created comprehensive unit tests for `KeywordRetriever` and expanded `test_langgraph_agent.py` to validate multi-tool execution in a single turn.
+
+### Key Tests Built:
+1. **`test_keyword_retriever.py` (4/4 passed)**:
+   - `test_01_exact_identifier_search`: Exact lookup for Jira key (`PAY-928`), HTTP error (`HTTP 401`), and symbol (`AuthService.validate_token`).
+   - `test_02_rbac_pre_filtering`: Enforces that unauthorized users cannot retrieve confidential security documents (`SEC-104`).
+   - `test_03_metadata_filters`: Validates filtering by `source='jira'` and `resource_type='file'`.
+   - `test_04_full_payload_metadata_preservation`: Validates all chunk fields and float scores are preserved.
+2. **`test_langgraph_agent.py` (6/6 passed)**:
+   - `test_05_multi_tool_execution_in_single_turn`: Validates LangGraph emitting `[keyword_search, semantic_search]` in a single turn, executing both in `_tool_node`, aggregating evidence chunks, and generating bracketed citations (`[1]`, `[2]`).
+   - `test_06_native_keyword_search_langchain_tool`: Direct validation of native LangChain `@tool` invocation.
+
+### Files Created / Modified:
+- [`backend/retrieval/tests/test_keyword_retriever.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/retrieval/tests/test_keyword_retriever.py)
+- [`backend/agent/tests/test_langgraph_agent.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/agent/tests/test_langgraph_agent.py)
+
+---
+
+## Step 61: Phase 5 End-to-End Verification & Documentation (`verify_phase5.py` & `docs/verify_phase5.md`)
+- **Date:** 2026-09-21
+- **Time:** 00:29 IST
+- **Purpose:** Created comprehensive visual verification script and architectural documentation demonstrating exact BM25+ identifier matching, database-level RBAC filtering, and LangGraph multi-tool planning in a single turn.
+
+### Key Verification Highlights:
+1. **Exact Lookups**: Verified exact matching for Jira issue keys (`PAY-928`), HTTP error codes (`HTTP 401`), and code symbols (`AuthService.validate_token`).
+2. **Database RBAC**: Verified unauthorized users (`engineer`, `intern`) are strictly blocked from confidential security records (`SEC-104`).
+3. **LangGraph Multi-Tool Execution**: Verified single-turn composite tool emission (`keyword_search` + `semantic_search`), multi-tool execution in `_tool_node`, and grounded answer synthesis with citations.
+
+### Files Created:
+- [`scripts/verify_phase5.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/scripts/verify_phase5.py)
+- [`docs/verify_phase5.md`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/docs/verify_phase5.md)
+
+
+
+
+
+
 
 
 
