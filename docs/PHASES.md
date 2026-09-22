@@ -325,8 +325,23 @@ The **Enterprise Knowledge Agent** is an autonomous, agentic RAG and knowledge i
 
 ### Phase 10: Hybrid Search Fusion Node (Reciprocal Rank Fusion)
 
-- **Status:** ⚪ Planned
-- **Goal:** Combine dense vector search, sparse keyword search, and graph traversal in parallel, applying Reciprocal Rank Fusion (RRF) inside LangGraph for unified multi-modal retrieval.
+- **Status:** ✅ Complete & Verified
+- **Goal:** Combine dense vector search, sparse keyword search, and property graph traversal in parallel, applying Reciprocal Rank Fusion (RRF) inside LangGraph for unified multi-modal retrieval with database-level RBAC.
+
+#### Key Implementations:
+1. **Reciprocal Rank Fusion Engine (`backend/retrieval/hybrid.py`):**
+   - Implemented `reciprocal_rank_fusion(ranked_lists, k=60, weights=None, top_k=None)` computing $RRF\_score(d) = \sum_{m \in M} \frac{w_m}{k + \text{rank}_m(d)}$.
+   - Scale-invariant fusion combining bounded vector cosine similarities ($[0.0, 1.0]$) and unbounded lexical BM25 scores.
+   - Multi-modality consensus boosting and rich provenance tracking (`modalities_matched`, `ranks_per_modality`).
+2. **Multi-Modal HybridRetriever (`backend/retrieval/hybrid.py`):**
+   - Orchestrates `SemanticRetriever`, `KeywordRetriever`, `EntityGraphRetriever`, and `GraphRetriever` with bound `UserSecurityContext`.
+   - Propagates database-level RBAC pre-filters across all dispatched engines with zero unauthorized data leakage.
+3. **Agent Tool Integration (`backend/agent/tools.py` & `backend/agent/langchain_tools.py`):**
+   - Registered `hybrid_search` tool definition and handler in `ToolRegistry`.
+   - Added Pydantic schema `HybridSearchInput` and `hybrid_search` StructuredTool in `create_langchain_tools()`.
+4. **LangGraph 6-Node Integration (`backend/agent/langgraph_planner.py`):**
+   - Updated system prompts and instructions across planners to position `hybrid_search` as the primary unified retrieval tool.
+   - Verified end-to-end execution through the `START` $\to$ `reasoner` $\to$ `tool_node` $\to$ `reranker` $\to$ `evaluator` $\to$ `generator` loop.
 
 ---
 
@@ -345,7 +360,7 @@ The **Enterprise Knowledge Agent** is an autonomous, agentic RAG and knowledge i
 | **Phase 7** | Evidence Evaluator & Self-RAG | `backend/evaluation/tests/` | `scripts/verify_phase7.py` | ✅ Passed |
 | **Phase 8** | RBAC Resolver & Translators | `backend/security/tests/` (32/32) | `scripts/verify_phase8.py` | ✅ Passed |
 | **Phase 9** | Local Cross-Encoder Reranker | `backend/ranking/tests/` (9/9) | `scripts/verify_phase9.py` | ✅ Passed |
-| **Phase 10** | Hybrid Search Fusion (RRF) | `backend/retrieval/tests/` | `scripts/verify_phase10.py` | ⚪ Planned |
+| **Phase 10** | Hybrid Search Fusion (RRF) | `backend/retrieval/tests/` (7/7) | `scripts/verify_phase10.py` | ✅ Passed |
 
 ---
 
@@ -356,6 +371,7 @@ To run any phase verification script from the repository root:
 ```bash
 # Set offline embeddings flag
 export HF_HUB_OFFLINE=1
+export TRANSFORMERS_OFFLINE=1
 
 # Phase 2: Embeddings & Vector Store
 .venv/bin/python scripts/verify_phase2.py
@@ -377,4 +393,10 @@ export HF_HUB_OFFLINE=1
 
 # Phase 8: Database-Level RBAC & Security Hierarchy
 .venv/bin/python scripts/verify_phase8.py
+
+# Phase 9: Local Cross-Encoder Reranker & 6-Node LangGraph
+.venv/bin/python scripts/verify_phase9.py
+
+# Phase 10: Hybrid Search Fusion & Reciprocal Rank Fusion
+.venv/bin/python scripts/verify_phase10.py
 ```

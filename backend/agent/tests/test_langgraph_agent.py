@@ -104,6 +104,49 @@ class MockGitHubEntityLLMForLangGraph(LLMProvider):
         )
 
 
+class MockHybridLLMForLangGraph(LLMProvider):
+    """Deterministic mock LLM for testing hybrid_search in LangGraph."""
+
+    def __init__(self) -> None:
+        self.call_history: List[List[Message]] = []
+
+    @property
+    def provider_name(self) -> str:
+        return "mock/hybrid-langgraph-llm"
+
+    def generate(self, messages: List[Message]) -> str:
+        self.call_history.append(messages)
+        last_content = messages[-1].content if messages else ""
+        if "Evaluate the evidence above" in last_content:
+            return json.dumps({
+                "relevance_score": 0.95,
+                "evidence_sufficient": True,
+                "missing_information": [],
+                "recommended_action": "GENERATE",
+                "reasoning": "Retrieved comprehensive hybrid evidence across vector and keyword modalities.",
+            })
+        return "To initiate a payment, invoke AuthService.charge with customer token and amount [1]."
+
+    def generate_with_tools(
+        self,
+        messages: List[Message],
+        tools: List[ToolDefinition],
+    ) -> LLMResponse:
+        self.call_history.append(messages)
+        return LLMResponse(
+            tool_calls=[
+                ToolCall(
+                    tool_name="hybrid_search",
+                    arguments={
+                        "query": "initiate payment transaction AuthService.charge",
+                        "top_k": 3,
+                    },
+                    call_id="call_hyb_1",
+                )
+            ]
+        )
+
+
 class MockLLMForLangGraph(LLMProvider):
     """
     Deterministic mock LLM for testing single-tool LangGraph loop.
@@ -750,8 +793,9 @@ Query `/healthz` endpoint to confirm 200 OK status.
             entity_graph_retriever=self.entity_retriever,
             user_context={"roles": ["engineer"], "user_id": "eng@company.com"},
         )
-        self.assertEqual(len(lc_tools), 5)
+        self.assertEqual(len(lc_tools), 6)
         tool_names = [t.name for t in lc_tools]
+        self.assertIn("hybrid_search", tool_names)
         self.assertIn("semantic_search", tool_names)
         self.assertIn("keyword_search", tool_names)
         self.assertIn("resource_lookup", tool_names)
@@ -1057,7 +1101,80 @@ Query `/healthz` endpoint to confirm 200 OK status.
             self.assertIn("rerank_rank", chunk)
             self.assertIn("original_rank", chunk)
 
+    def test_14_native_langchain_hybrid_search_tool(self) -> None:
+        """
+        Verifies that `hybrid_search` is registered in `create_langchain_tools()`
+        and executes Reciprocal Rank Fusion returning structured JSON output.
+        """
+        lc_tools = create_langchain_tools(
+            semantic_retriever=self.retriever,
+            keyword_retriever=self.keyword_retriever,
+            entity_graph_retriever=self.entity_retriever,
+            graph_retriever=self.graph_retriever,
+            bm25_index=self.bm25_index,
+            user_context={"roles": ["engineer"], "user_id": "eng@company.com"},
+        )
+
+        tool_map = {t.name: t for t in lc_tools}
+        self.assertIn("hybrid_search", tool_map)
+
+        hybrid_tool = tool_map["hybrid_search"]
+        raw_output = hybrid_tool.invoke({
+            "query": "checkout timeout 3DS",
+            "top_k": 3,
+            "k": 60,
+        })
+
+        self.assertIsInstance(raw_output, str)
+        results = json.loads(raw_output)
+        self.assertIsInstance(results, list)
+        self.assertGreater(len(results), 0)
+
+        first_hit = results[0]
+        self.assertIn("chunk_id", first_hit)
+        self.assertIn("rrf_score", first_hit)
+        self.assertIn("rrf_rank", first_hit)
+        self.assertIn("modalities_matched", first_hit)
+        self.assertIn("ranks_per_modality", first_hit)
+
+    def test_15_hybrid_search_tool_in_langgraph_loop(self) -> None:
+        """
+        Verifies end-to-end execution of `hybrid_search` within the 6-node LangGraph
+        agent state machine, confirming tool invocation, RRF fusion, and reranking.
+        """
+        mock_llm = MockHybridLLMForLangGraph()
+        planner = LangGraphAgentPlanner(
+            llm_provider=mock_llm,
+            tool_registry=self.tool_registry,
+            enable_reranking=True,
+            max_turns=3,
+        )
+
+        result = planner.run(
+            query="How do I initiate a payment transaction?",
+            user_context={"roles": ["engineer"], "user_id": "eng@company.com"},
+        )
+
+        # 1. Verify tool calls
+        self.assertEqual(len(result["tool_calls"]), 1)
+        self.assertEqual(result["tool_calls"][0]["tool"], "hybrid_search")
+
+        # 2. Verify retrieved chunks and fusion metadata
+        self.assertGreater(len(result["retrieved_chunks"]), 0)
+        first_chunk = result["retrieved_chunks"][0]
+        self.assertIn("rrf_score", first_chunk)
+        self.assertIn("modalities_matched", first_chunk)
+
+        # 3. Verify reranking was applied on top of hybrid fused candidates
+        self.assertTrue(result["rerank_applied"])
+        self.assertIn("rerank_score", first_chunk)
+
+        # 4. Verify answer and citations
+        self.assertIn("AuthService.charge", result["answer"])
+        self.assertGreater(len(result["citations"]), 0)
+
 
 if __name__ == "__main__":
     unittest.main()
+
 

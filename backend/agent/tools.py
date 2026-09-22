@@ -13,6 +13,7 @@ from typing import Any, Callable, Dict, List, Optional
 from backend.llm.base import ToolDefinition
 from backend.retrieval.entity_graph import EntityGraphRetriever
 from backend.retrieval.graph import GraphRetriever
+from backend.retrieval.hybrid import HybridRetriever
 from backend.retrieval.keyword import KeywordRetriever
 from backend.retrieval.resource_lookup import ResourceLookupRetriever
 from backend.retrieval.semantic import SemanticRetriever
@@ -72,14 +73,16 @@ def create_default_tool_registry(
     resource_lookup_retriever: Optional[ResourceLookupRetriever] = None,
     graph_retriever: Optional[GraphRetriever] = None,
     entity_graph_retriever: Optional[EntityGraphRetriever] = None,
+    hybrid_retriever: Optional[HybridRetriever] = None,
 ) -> ToolRegistry:
     """
     Creates and populates the standard ToolRegistry with all enterprise retrieval tools:
-    1. `semantic_search`: Dense vector search (concepts, guides, policies).
-    2. `keyword_search`: Sparse BM25+ search (exact IDs, error codes, symbols).
-    3. `resource_lookup`: Direct lookup by canonical URI/URL to fetch full documents.
-    4. `graph_traversal`: Parent-child hierarchy navigation & sibling expansion.
-    5. `github_entity_search`: Developer intelligence, PRs, commits, reviews & graph paths.
+    1. `hybrid_search`: Unified multi-modal fusion search combining vector, BM25, and graph via RRF.
+    2. `semantic_search`: Dense vector search (concepts, guides, policies).
+    3. `keyword_search`: Sparse BM25+ search (exact IDs, error codes, symbols).
+    4. `resource_lookup`: Direct lookup by canonical URI/URL to fetch full documents.
+    5. `graph_traversal`: Parent-child hierarchy navigation & sibling expansion.
+    6. `github_entity_search`: Developer intelligence, PRs, commits, reviews & graph paths.
     """
     registry = ToolRegistry()
     sem_retriever = semantic_retriever or SemanticRetriever()
@@ -101,6 +104,12 @@ def create_default_tool_registry(
         vector_store=shared_vector_store,
     )
     ent_retriever = entity_graph_retriever or EntityGraphRetriever()
+    hyb_retriever = hybrid_retriever or HybridRetriever(
+        semantic_retriever=sem_retriever,
+        keyword_retriever=kw_retriever,
+        entity_graph_retriever=ent_retriever,
+        graph_retriever=grp_retriever,
+    )
 
     # ── 1. Semantic Search Tool ──────────────────────────────────────────────
     semantic_search_def = ToolDefinition(
@@ -348,6 +357,74 @@ def create_default_tool_registry(
             user_context=user_context,
         )
 
+    # ── 6. Hybrid Multi-Modal Search Tool (RRF) ───────────────────────────────
+    hybrid_search_def = ToolDefinition(
+        name="hybrid_search",
+        description=(
+            "Execute unified multi-modal hybrid search across vector embeddings, BM25+ keywords, and "
+            "knowledge graph entities using Reciprocal Rank Fusion (RRF). Ideal when a query contains both "
+            "conceptual requirements and exact technical tokens (e.g. error codes, identifiers, function names)."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Natural language question or search query combining concepts and identifiers.",
+                },
+                "modalities": {
+                    "type": "array",
+                    "items": {"type": "string", "enum": ["vector", "keyword", "graph"]},
+                    "description": "Optional list of modalities to run (default: ['vector', 'keyword', 'graph']).",
+                },
+                "source": {
+                    "type": "string",
+                    "description": "Optional filter by platform: 'github', 'notion', 'dropbox', 'gmail', 'slack'.",
+                    "enum": ["github", "notion", "dropbox", "gmail", "slack"],
+                },
+                "resource_type": {
+                    "type": "string",
+                    "description": "Optional filter by resource type: 'repository', 'file', 'issue', 'page', 'email', 'playbook'.",
+                },
+                "top_k": {
+                    "type": "integer",
+                    "description": "Maximum number of fused results to return (default: 5).",
+                    "default": 5,
+                },
+                "k": {
+                    "type": "integer",
+                    "description": "RRF smoothing constant (default: 60).",
+                    "default": 60,
+                },
+            },
+            "required": ["query"],
+        },
+    )
+
+    def handle_hybrid_search(arguments: Dict[str, Any], user_context: Dict[str, Any]) -> List[Dict[str, Any]]:
+        query = arguments.get("query", "")
+        top_k = arguments.get("top_k", 5)
+        modalities = arguments.get("modalities")
+        source = arguments.get("source")
+        resource_type = arguments.get("resource_type")
+        k = arguments.get("k", 60)
+
+        metadata_filters = {}
+        if source:
+            metadata_filters["source"] = source
+        if resource_type:
+            metadata_filters["resource_type"] = resource_type
+
+        return hyb_retriever.search(
+            query=query,
+            top_k=top_k,
+            modalities=modalities,
+            k=k,
+            user_context=user_context,
+            metadata_filters=metadata_filters if metadata_filters else None,
+        )
+
+    registry.register(hybrid_search_def, handle_hybrid_search)
     registry.register(semantic_search_def, handle_semantic_search)
     registry.register(keyword_search_def, handle_keyword_search)
     registry.register(resource_lookup_def, handle_resource_lookup)

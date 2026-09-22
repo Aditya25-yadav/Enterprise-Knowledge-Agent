@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field
 from backend.agent.tools import ToolRegistry
 from backend.retrieval.entity_graph import EntityGraphRetriever
 from backend.retrieval.graph import GraphRetriever
+from backend.retrieval.hybrid import HybridRetriever
 from backend.retrieval.keyword import KeywordRetriever
 from backend.retrieval.resource_lookup import ResourceLookupRetriever
 from backend.retrieval.semantic import SemanticRetriever
@@ -26,6 +27,33 @@ from backend.storage.bm25_index import BM25Index
 
 
 # ── Pydantic Schemas for LangChain Tool Arguments ─────────────────────────────
+
+class HybridSearchInput(BaseModel):
+    """Input parameters for unified multi-modal hybrid search (RRF)."""
+    query: str = Field(
+        description="Natural language question or search query combining concepts, runbook names, and technical identifiers."
+    )
+    top_k: int = Field(
+        default=5,
+        description="Maximum number of fused results to retrieve (default: 5)."
+    )
+    modalities: Optional[List[str]] = Field(
+        default=None,
+        description="Optional list of modalities to execute: 'vector', 'keyword', 'graph' (default: all)."
+    )
+    source: Optional[str] = Field(
+        default=None,
+        description="Optional filter by platform: 'github', 'notion', 'dropbox', 'gmail', 'slack'."
+    )
+    resource_type: Optional[str] = Field(
+        default=None,
+        description="Optional filter by resource type: 'repository', 'file', 'issue', 'page', 'email', 'playbook'."
+    )
+    k: int = Field(
+        default=60,
+        description="Reciprocal Rank Fusion smoothing parameter k (default: 60)."
+    )
+
 
 class SemanticSearchInput(BaseModel):
     """Input parameters for semantic vector search."""
@@ -120,17 +148,19 @@ def create_langchain_tools(
     resource_lookup_retriever: Optional[ResourceLookupRetriever] = None,
     graph_retriever: Optional[GraphRetriever] = None,
     entity_graph_retriever: Optional[EntityGraphRetriever] = None,
+    hybrid_retriever: Optional[HybridRetriever] = None,
     bm25_index: Optional[BM25Index] = None,
     user_context: Optional[Dict[str, Any]] = None,
 ) -> List[BaseTool]:
     """
     Creates standard LangChain BaseTool instances with bound RBAC security context
-    across all 5 enterprise retrieval modalities:
-      1. `semantic_search`: Dense vector search.
-      2. `keyword_search`: Sparse BM25+ search.
-      3. `resource_lookup`: Direct URI / document lookup.
-      4. `graph_traversal`: Parent-child hierarchy navigation & sibling expansion.
-      5. `github_entity_search`: Developer intelligence, PRs, commits, reviews & graph paths.
+    across all 6 enterprise retrieval modalities:
+      1. `hybrid_search`: Unified multi-modal fusion search combining vector, BM25, and graph via RRF.
+      2. `semantic_search`: Dense vector search.
+      3. `keyword_search`: Sparse BM25+ search.
+      4. `resource_lookup`: Direct URI / document lookup.
+      5. `graph_traversal`: Parent-child hierarchy navigation & sibling expansion.
+      6. `github_entity_search`: Developer intelligence, PRs, commits, reviews & graph paths.
     """
     retriever = semantic_retriever or SemanticRetriever()
     shared_vector_store = getattr(retriever, "vector_store", None)
@@ -151,11 +181,41 @@ def create_langchain_tools(
         vector_store=shared_vector_store,
     )
     ent_retriever = entity_graph_retriever or EntityGraphRetriever()
+    hyb_retriever = hybrid_retriever or HybridRetriever(
+        semantic_retriever=retriever,
+        keyword_retriever=kw_retriever,
+        entity_graph_retriever=ent_retriever,
+        graph_retriever=grp_retriever,
+    )
     ctx = user_context or {"roles": ["employee"], "user_id": "user@enterprise.com", "groups": []}
 
     user_roles = ctx.get("roles") or ctx.get("allowed_roles")
     user_id = ctx.get("user_id")
     user_groups = ctx.get("groups")
+
+    def run_hybrid_search(
+        query: str,
+        top_k: int = 5,
+        modalities: Optional[List[str]] = None,
+        source: Optional[str] = None,
+        resource_type: Optional[str] = None,
+        k: int = 60,
+    ) -> str:
+        metadata_filters = {}
+        if source:
+            metadata_filters["source"] = source
+        if resource_type:
+            metadata_filters["resource_type"] = resource_type
+
+        results = hyb_retriever.search(
+            query=query,
+            top_k=top_k,
+            modalities=modalities,
+            k=k,
+            user_context=ctx,
+            metadata_filters=metadata_filters if metadata_filters else None,
+        )
+        return json.dumps(results, ensure_ascii=False)
 
     def run_semantic_search(
         query: str,
@@ -242,6 +302,17 @@ def create_langchain_tools(
             return res
         return json.dumps(res, ensure_ascii=False)
 
+    hybrid_tool = StructuredTool.from_function(
+        name="hybrid_search",
+        description=(
+            "Execute unified multi-modal hybrid search across vector embeddings, BM25+ keywords, and "
+            "knowledge graph entities using Reciprocal Rank Fusion (RRF). Ideal when a query contains both "
+            "conceptual requirements and exact technical tokens (e.g. error codes, identifiers, function names)."
+        ),
+        func=run_hybrid_search,
+        args_schema=HybridSearchInput,
+    )
+
     semantic_tool = StructuredTool.from_function(
         name="semantic_search",
         description=(
@@ -295,7 +366,7 @@ def create_langchain_tools(
         args_schema=GithubEntitySearchInput,
     )
 
-    return [semantic_tool, keyword_tool, resource_tool, graph_tool, entity_tool]
+    return [hybrid_tool, semantic_tool, keyword_tool, resource_tool, graph_tool, entity_tool]
 
 
 

@@ -60,14 +60,15 @@ class AgentPlanner:
 You have access to specialized enterprise retrieval tools to find documentation, architecture guides, code repositories, setup procedures, issues, and communications across GitHub, Notion, Gmail, Dropbox, Jira and Confluence.
 
 Guidelines for Tool Selection:
-1. `semantic_search`: Use for natural language questions, conceptual understanding, high-level architecture explanations, setup procedures, runbooks, and policy guidelines.
-2. `keyword_search`: Use for exact technical identifiers, Jira issue keys (e.g. 'PAY-928'), GitHub PR numbers (e.g. '#1842'), HTTP/system error codes (e.g. 'HTTP 401', 'ECONNREFUSED'), code symbols/classes (e.g. 'AuthService.charge'), or exact filenames.
-3. `resource_lookup`: Use when you already know or discover a specific canonical URI (e.g. 'github://repo/owner/name', 'notion://vault/master', 'jira://issue/PAY-928', 'https://github.com/...'), direct URL, chunk ID, or exact document title, or when you need the complete stitched document content.
-4. `graph_traversal`: Use to explore structural document hierarchies:
+1. `hybrid_search`: Preferred general search tool. Combines dense vector semantics, BM25+ keywords, and graph entities via Reciprocal Rank Fusion (RRF). Use for queries containing both high-level concepts and exact technical tokens.
+2. `semantic_search`: Use for natural language questions, conceptual understanding, high-level architecture explanations, setup procedures, runbooks, and policy guidelines.
+3. `keyword_search`: Use for exact technical identifiers, Jira issue keys (e.g. 'PAY-928'), GitHub PR numbers (e.g. '#1842'), HTTP/system error codes (e.g. 'HTTP 401', 'ECONNREFUSED'), code symbols/classes (e.g. 'AuthService.charge'), or exact filenames.
+4. `resource_lookup`: Use when you already know or discover a specific canonical URI (e.g. 'github://repo/owner/name', 'notion://vault/master', 'jira://issue/PAY-928', 'https://github.com/...'), direct URL, chunk ID, or exact document title, or when you need the complete stitched document content.
+5. `graph_traversal`: Use to explore structural document hierarchies:
    - 'get_children': Find all child documents, repository files, sub-issues, or sub-pages under a known parent container.
    - 'get_neighbors': Expand preceding and succeeding sibling chunks around a matched step or section.
    - 'get_full_sequence': Assemble an entire ordered multi-step sequence, runbook, or workflow by its sequence ID.
-5. `github_entity_search`: Use for developer relationships, code intelligence, and GitHub entities:
+6. `github_entity_search`: Use for developer relationships, code intelligence, and GitHub entities:
    - 'get_pr_details': Find PR author, reviewers, assignees, modified files, and closed issues.
    - 'get_user_activity': Find PRs authored, commits, reviews, and assigned issues for a developer.
    - 'get_file_contributors': Find commit authors, history, and PRs touching a specific file.
@@ -76,12 +77,12 @@ Guidelines for Tool Selection:
    - 'get_labeled_items': Find PRs and issues tagged with a specific label.
    - 'get_team_overview': Find team members and accessible repositories.
    - 'get_neighbors' / 'find_path': Generalized multi-hop entity traversal and relationship path finding.
-6. Multi-Tool & Multi-Hop Planning:
+7. Multi-Tool & Multi-Hop Planning:
    - Single-Turn Parallel: If a query combines concepts, identifiers, or developer questions, you may invoke multiple tools in the same turn.
    - Multi-Turn Multi-Hop: If initial search results identify a key PR, commit, or document, make follow-up calls in subsequent turns with `github_entity_search`, `resource_lookup`, or `graph_traversal`.
-7. If initial search results are empty or lack specific details, refine your query or traverse adjacent graph nodes.
-8. Once sufficient evidence is gathered, formulate a clear, professional, and well-structured answer.
-9. Always cite specific evidence when stating facts or steps using bracketed references (e.g. [1], [2]).
+8. If initial search results are empty or lack specific details, refine your query or traverse adjacent graph nodes.
+9. Once sufficient evidence is gathered, formulate a clear, professional, and well-structured answer.
+10. Always cite specific evidence when stating facts or steps using bracketed references (e.g. [1], [2]).
 """
 
 

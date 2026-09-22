@@ -302,7 +302,7 @@ class TestEntityGraphRetriever(unittest.TestCase):
             entity_graph_retriever=self.retriever,
             user_context={"roles": ["engineer"], "user_id": "eng@company.com"},
         )
-        self.assertEqual(len(lc_tools), 5)
+        self.assertEqual(len(lc_tools), 6)
         entity_tool = next(t for t in lc_tools if t.name == "github_entity_search")
         res_json = entity_tool.invoke({"operation": "get_pr_details", "target": "142"})
         self.assertIn("alice", res_json)
