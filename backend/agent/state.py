@@ -27,6 +27,8 @@ class AgentState(TypedDict):
       - missing_information: List of knowledge gaps identified during reflection.
       - retrieval_attempts: Number of retrieval / reflection cycles executed.
       - reformulated_queries: History of queries produced by QueryReformulator.
+      - rerank_scores: Calibrated relevance scores from CrossEncoderReranker.
+      - rerank_applied: Boolean flag indicating whether reranking has been executed.
       - turn_count: Number of reasoning / execution turns.
       - error: Optional error message if execution encounters an exception.
     """
@@ -41,6 +43,8 @@ class AgentState(TypedDict):
     missing_information: List[str]
     retrieval_attempts: int
     reformulated_queries: List[str]
+    rerank_scores: Dict[str, float]
+    rerank_applied: bool
     turn_count: int
     error: Optional[str]
 

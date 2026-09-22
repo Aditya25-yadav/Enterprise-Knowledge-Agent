@@ -60,6 +60,7 @@ from backend.llm.base import (
 )
 from backend.llm.factory import get_llm_provider
 from backend.models.evaluation import EvaluationResult, RecommendedAction
+from backend.ranking.reranker import CrossEncoderReranker
 
 
 def _to_internal_messages(langchain_msgs: List[BaseMessage]) -> List[Message]:
@@ -140,6 +141,9 @@ Guidelines for Tool Selection:
         answer_generator: Optional[AnswerGenerator] = None,
         evidence_evaluator: Optional[EvidenceEvaluator] = None,
         query_reformulator: Optional[QueryReformulator] = None,
+        reranker: Optional[CrossEncoderReranker] = None,
+        enable_reranking: bool = True,
+        rerank_threshold: float = 0.0,
         max_turns: int = 5,
         max_retrieval_attempts: int = 3,
     ) -> None:
@@ -148,6 +152,9 @@ Guidelines for Tool Selection:
         self.answer_generator = answer_generator or AnswerGenerator(llm_provider=self.llm_provider)
         self.evidence_evaluator = evidence_evaluator or EvidenceEvaluator(llm_provider=self.llm_provider)
         self.query_reformulator = query_reformulator or QueryReformulator(llm_provider=self.llm_provider)
+        self.enable_reranking = enable_reranking
+        self.rerank_threshold = rerank_threshold
+        self.reranker = reranker or (CrossEncoderReranker() if enable_reranking else None)
         self.max_turns = max_turns
         self.max_retrieval_attempts = max_retrieval_attempts
         self.graph = self._build_graph()
@@ -251,6 +258,39 @@ Guidelines for Tool Selection:
         return {
             "messages": new_tool_messages,
             "retrieved_chunks": accumulated_chunks,
+        }
+
+    def _reranker_node(self, state: AgentState) -> Dict[str, Any]:
+        """
+        Local Cross-Encoder Reranker Node (Phase 9):
+        Re-scores and re-orders candidate evidence chunks by computing cross-attention
+        between the active query and candidate texts, rejecting irrelevant noise.
+        """
+        if not self.enable_reranking or not self.reranker:
+            return {"rerank_applied": False, "rerank_scores": {}}
+
+        query = state.get("current_query") or state.get("query")
+        chunks = state.get("retrieved_chunks", [])
+        if not chunks or not query:
+            return {"rerank_applied": True, "rerank_scores": {}}
+
+        reranked_results = self.reranker.rerank(
+            query=query,
+            chunks=chunks,
+            score_threshold=self.rerank_threshold,
+        )
+
+        reranked_chunks = [r.to_dict() for r in reranked_results]
+        scores = {r.chunk_id: round(r.score, 4) for r in reranked_results}
+
+        # If threshold filtered everything out, preserve original chunks to prevent empty context
+        if not reranked_chunks and chunks:
+            reranked_chunks = chunks
+
+        return {
+            "retrieved_chunks": reranked_chunks,
+            "rerank_scores": scores,
+            "rerank_applied": True,
         }
 
     def _evaluator_node(self, state: AgentState) -> Dict[str, Any]:
@@ -376,9 +416,10 @@ Guidelines for Tool Selection:
     def _build_graph(self) -> Any:
         workflow = StateGraph(AgentState)
 
-        # Add 5 specialized nodes
+        # Add 6 specialized nodes
         workflow.add_node("reasoner", self._reasoner_node)
         workflow.add_node("tool_node", self._tool_node)
+        workflow.add_node("reranker", self._reranker_node)
         workflow.add_node("evaluator", self._evaluator_node)
         workflow.add_node("reformulator", self._reformulator_node)
         workflow.add_node("generator", self._generator_node)
@@ -393,7 +434,8 @@ Guidelines for Tool Selection:
                 "generator": "generator",
             },
         )
-        workflow.add_edge("tool_node", "evaluator")
+        workflow.add_edge("tool_node", "reranker")
+        workflow.add_edge("reranker", "evaluator")
         workflow.add_conditional_edges(
             "evaluator",
             self._evaluator_routing,
@@ -441,6 +483,8 @@ Guidelines for Tool Selection:
             "missing_information": [],
             "retrieval_attempts": 0,
             "reformulated_queries": [],
+            "rerank_scores": {},
+            "rerank_applied": False,
             "turn_count": 0,
             "error": None,
         }
@@ -467,6 +511,8 @@ Guidelines for Tool Selection:
             "missing_information": final_state.get("missing_information", []),
             "retrieval_attempts": final_state.get("retrieval_attempts", 0),
             "reformulated_queries": final_state.get("reformulated_queries", []),
+            "rerank_applied": final_state.get("rerank_applied", False),
+            "rerank_scores": final_state.get("rerank_scores", {}),
             "turns": final_state.get("turn_count", 1),
             "llm_provider": getattr(self.llm_provider, "__class__", type(self.llm_provider)).__name__,
         }

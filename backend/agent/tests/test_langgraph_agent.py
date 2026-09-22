@@ -665,7 +665,7 @@ Query `/healthz` endpoint to confirm 200 OK status.
         self.bm25_index.clear()
 
     def test_01_graph_compilation(self) -> None:
-        """Verifies StateGraph structure with all 5 nodes compiled."""
+        """Verifies StateGraph structure with all 6 nodes compiled."""
         mock_llm = MockLLMForLangGraph()
         planner = LangGraphAgentPlanner(
             llm_provider=mock_llm,
@@ -676,6 +676,7 @@ Query `/healthz` endpoint to confirm 200 OK status.
         nodes = planner.graph.nodes
         self.assertIn("reasoner", nodes)
         self.assertIn("tool_node", nodes)
+        self.assertIn("reranker", nodes)
         self.assertIn("evaluator", nodes)
         self.assertIn("reformulator", nodes)
         self.assertIn("generator", nodes)
@@ -1027,6 +1028,36 @@ Query `/healthz` endpoint to confirm 200 OK status.
         self.assertEqual(result["retrieval_attempts"], 2)
         self.assertIn("Best effort answer based on available evidence", result["answer"])
 
+    def test_13_reranker_node_execution_in_langgraph_loop(self) -> None:
+        """
+        Verifies that candidate chunks retrieved during tool execution are
+        scored, re-ordered, and annotated with rerank metadata by the `reranker` node.
+        """
+        mock_llm = MockLLMForLangGraph()
+        planner = LangGraphAgentPlanner(
+            llm_provider=mock_llm,
+            tool_registry=self.tool_registry,
+            enable_reranking=True,
+            max_turns=3,
+        )
+
+        result = planner.run(
+            query="How do I initiate a payment transaction?",
+            user_context={"roles": ["engineer"], "user_id": "eng@company.com"},
+        )
+
+        # Verify reranker was applied
+        self.assertTrue(result["rerank_applied"])
+        self.assertIsInstance(result["rerank_scores"], dict)
+        self.assertGreater(len(result["rerank_scores"]), 0)
+
+        # Verify chunks have rerank fields
+        for chunk in result["retrieved_chunks"]:
+            self.assertIn("rerank_score", chunk)
+            self.assertIn("rerank_rank", chunk)
+            self.assertIn("original_rank", chunk)
+
 
 if __name__ == "__main__":
     unittest.main()
+

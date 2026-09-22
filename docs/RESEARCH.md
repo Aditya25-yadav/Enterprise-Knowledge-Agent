@@ -4387,3 +4387,950 @@ That fits very cleanly with your existing architecture, which already calls for 
 **Phase 7 gives your agent the ability to recognize “I don't have enough evidence yet,” identify what is missing, change its retrieval strategy/query, and try again before generating an answer.**
 
 And for your particular Enterprise Knowledge Agent, **this is the phase where the combination of LangGraph + tool calling + Hybrid RAG + Graph RAG starts behaving like an actual agentic retrieval system rather than a conventional RAG pipeline.**
+
+---
+
+The easiest way to understand this is to separate **cross-encoder** and **reranker**:
+
+> **Cross-encoder = the model architecture that scores a query–document pair.**
+> **Reranker = the retrieval component that uses that model to reorder the retrieved candidates.**
+
+They are related, but they are not exactly the same thing.
+
+---
+
+# 1. First: why do we need a reranker?
+
+Suppose the user asks:
+
+> **"How does the Payment Service authenticate users?"**
+
+Your first-stage retrieval might return:
+
+```text
+1. Payment Service Overview
+2. Authentication Architecture
+3. Payment Service Deployment Guide
+4. OAuth2 Configuration
+5. Payment Service Incident Report
+```
+
+The retriever says:
+
+```text
+"These 5 documents are potentially relevant."
+```
+
+But it may not know which one is **most relevant to this exact question**.
+
+So we introduce:
+
+```text
+                    Query
+                      │
+                      ▼
+              First-stage retrieval
+                      │
+              20 candidate chunks
+                      │
+                      ▼
+                RERANKER
+                      │
+                5 best chunks
+                      │
+                      ▼
+                 LLM / Evaluator
+```
+
+The reranker essentially asks:
+
+> **"Given this exact query, how relevant is each candidate chunk?"**
+
+---
+
+# 2. How normal embedding retrieval works
+
+Before understanding a cross-encoder, understand the normal **bi-encoder**.
+
+Suppose:
+
+```text
+Query:
+"How does Payment Service authenticate?"
+```
+
+and:
+
+```text
+Document:
+"Payment services authenticate using OAuth2 bearer tokens."
+```
+
+A bi-encoder processes them independently:
+
+```text
+                Query
+                  │
+                  ▼
+          Embedding Model
+                  │
+                  ▼
+           Query vector
+        [0.21, 0.82, ...]
+```
+
+and separately:
+
+```text
+              Document
+                  │
+                  ▼
+          Embedding Model
+                  │
+                  ▼
+         Document vector
+        [0.19, 0.79, ...]
+```
+
+Then:
+
+```text
+Query vector
+     +
+Document vector
+     ↓
+Cosine similarity
+     ↓
+0.91
+```
+
+The important point is:
+
+> **The query and document are encoded independently.**
+
+This is why embeddings are extremely useful for large-scale retrieval.
+
+You can precompute:
+
+```text
+Document 1 → vector
+Document 2 → vector
+Document 3 → vector
+...
+Document 10,000,000 → vector
+```
+
+and store them in your vector database.
+
+At query time, you only calculate one new query embedding.
+
+---
+
+# 3. How a Cross-Encoder is different
+
+A cross-encoder does **not** encode the query and document independently.
+
+Instead, it puts them **together into the Transformer**.
+
+Conceptually:
+
+```text
+Query:
+"How does Payment Service authenticate?"
+
+                +
+
+Document:
+"Payment services authenticate using OAuth2 bearer tokens."
+
+                ↓
+
+          CROSS-ENCODER
+                ↓
+          relevance score
+                ↓
+              0.94
+```
+
+The critical difference is:
+
+```text
+Bi-encoder:
+
+Query ──→ Encoder ──→ Q vector
+Document ──→ Encoder ──→ D vector
+
+                 ↓
+             similarity
+```
+
+versus:
+
+```text
+Cross-encoder:
+
+Query ─────────────┐
+                   │
+                   ▼
+              Transformer
+                   ▲
+                   │
+Document ──────────┘
+
+                   ↓
+              relevance
+```
+
+---
+
+# 4. What actually happens inside the Transformer?
+
+This is the interesting part.
+
+Suppose we have:
+
+```text
+Query:
+How does Payment Service authenticate?
+
+Document:
+Payment services authenticate using OAuth2 bearer tokens.
+```
+
+The model combines them into something conceptually like:
+
+```text
+[CLS]
+How does Payment Service authenticate?
+[SEP]
+Payment services authenticate using OAuth2 bearer tokens.
+[SEP]
+```
+
+The exact formatting depends on the model architecture/tokenizer, but conceptually this is what happens.
+
+These are converted into tokens:
+
+```text
+How
+does
+Payment
+Service
+authenticate
+?
+[SEP]
+Payment
+services
+authenticate
+using
+OAuth2
+bearer
+tokens
+.
+```
+
+Then the Transformer processes **all of these tokens together**.
+
+---
+
+# 5. Why "together" is powerful
+
+Transformers use **self-attention**.
+
+This allows tokens from the query to interact with tokens from the document.
+
+For example:
+
+```text
+Query token                    Document token
+
+"authenticate"  ───────────→  "authenticate"
+"Payment"       ───────────→  "Payment"
+"Service"       ───────────→  "services"
+```
+
+The model can learn relationships like:
+
+```text
+Payment Service
+       ↕
+payment services
+
+authenticate
+       ↕
+authenticate
+
+How does X authenticate?
+       ↕
+OAuth2 bearer tokens
+```
+
+This is much richer than simply comparing two independently generated vectors.
+
+---
+
+# 6. Self-attention is the key
+
+Imagine the query:
+
+> "Which database does the payment service use?"
+
+Candidate:
+
+> "The Payment Service uses PostgreSQL for transaction storage."
+
+The model can learn attention relationships such as:
+
+```text
+"database" ─────────→ "PostgreSQL"
+"payment service" ──→ "Payment Service"
+"use" ──────────────→ "uses"
+```
+
+Therefore the Transformer develops a representation of:
+
+> "This document directly answers what database the Payment Service uses."
+
+That information then flows through the Transformer layers.
+
+Eventually the model produces a representation that is passed to a classification/scoring head.
+
+---
+
+# 7. The final scoring layer
+
+At the end, the cross-encoder typically produces a scalar:
+
+```text
+                    Transformer
+                         │
+                         ▼
+                  Representation
+                         │
+                         ▼
+                   Linear layer
+                         │
+                         ▼
+                     raw score
+```
+
+For example:
+
+```text
+Query + Chunk A →  3.72
+Query + Chunk B →  1.14
+Query + Chunk C → -2.30
+Query + Chunk D →  4.91
+```
+
+Higher score generally means:
+
+```text
+more relevant
+```
+
+depending on the model/training setup.
+
+---
+
+# 8. Where does the model learn this?
+
+This is very important.
+
+A reranker isn't magically knowing relevance.
+
+It has been **trained on query-document relevance examples**.
+
+Conceptually, training data looks like:
+
+```text
+Query                              Document                     Label
+
+"How does authentication work?"    "OAuth2 is used..."          1
+
+"How does authentication work?"    "The office is located..."   0
+```
+
+The model learns:
+
+```text
+query + relevant document → high score
+
+query + irrelevant document → low score
+```
+
+Over many examples, it learns what kinds of query-document relationships indicate relevance.
+
+For models such as MS MARCO-based rerankers, the training objective is specifically oriented toward passage ranking.
+
+---
+
+# 9. Now what exactly is a reranker?
+
+A **reranker is the whole ranking component**, not necessarily the model itself.
+
+For example:
+
+```python
+reranker = CrossEncoderReranker(...)
+```
+
+Internally it might do:
+
+```text
+1. Receive query
+2. Receive retrieved chunks
+3. Format chunks
+4. Create (query, chunk) pairs
+5. Run CrossEncoder
+6. Get scores
+7. Normalize scores
+8. Sort candidates
+9. Apply top_k
+10. Apply threshold
+11. Return ranked results
+```
+
+So:
+
+```text
+CrossEncoder
+     ↓
+is the scoring model
+
+Reranker
+     ↓
+is the system/component
+that uses the scoring model
+to reorder candidates
+```
+
+---
+
+# 10. Your Phase 9 implementation
+
+Your proposed implementation:
+
+```python
+rerank(
+    query,
+    chunks,
+    top_k,
+    score_threshold
+)
+```
+
+would conceptually execute:
+
+```text
+                    Query
+                      │
+                      ▼
+          "How does Payment Service
+              authenticate?"
+                      │
+                      │
+       ┌──────────────┼──────────────┐
+       ▼              ▼              ▼
+    Chunk A         Chunk B        Chunk C
+       │              │              │
+       └──────────────┼──────────────┘
+                      ▼
+              Create pairs
+                      │
+       ┌──────────────┼──────────────┐
+       ▼              ▼              ▼
+    (Q,A)            (Q,B)          (Q,C)
+       │              │              │
+       ▼              ▼              ▼
+  CrossEncoder   CrossEncoder   CrossEncoder
+       │              │              │
+       ▼              ▼              ▼
+     0.42           0.94           0.71
+                      │
+                      ▼
+                  Sort ↓
+                      │
+                      ▼
+               B → 0.94
+               C → 0.71
+               A → 0.42
+                      │
+                      ▼
+                 top_k = 2
+                      │
+                      ▼
+               B, C
+```
+
+That's the entire essence of a cross-encoder reranker.
+
+---
+
+# 11. Why is it called "cross"-encoder?
+
+Because the query and document **cross-attend to one another inside the same Transformer**.
+
+Compare:
+
+### Bi-encoder
+
+```text
+           Query
+             │
+             ▼
+         Encoder
+             │
+             ▼
+          Vector
+             │
+             │
+             ▼
+        Similarity
+             ▲
+             │
+          Vector
+             ▲
+             │
+         Encoder
+             ▲
+             │
+         Document
+```
+
+The two sides are separate.
+
+### Cross-encoder
+
+```text
+          Query
+             │
+             │
+             ▼
+       ┌─────────────┐
+       │ Transformer │
+       │             │
+       │ Query ↔ Doc │
+       │             │
+       └─────────────┘
+             ▲
+             │
+          Document
+```
+
+They interact **inside the encoder**.
+
+That's why it's called a **cross-encoder**.
+
+---
+
+# 12. Why is it more accurate?
+
+Consider:
+
+### Query
+
+> "Which team owns the payment service?"
+
+### Candidate A
+
+> "The Payment Service is a Java-based transaction processing system."
+
+### Candidate B
+
+> "The Payments Platform team owns and maintains the Payment Service."
+
+Embedding similarity might give:
+
+```text
+A → 0.84
+B → 0.82
+```
+
+because both are strongly about Payment Service.
+
+But a cross-encoder can recognize:
+
+```text
+Query:
+"Which team owns..."
+       ↓
+Candidate B:
+"team owns and maintains..."
+```
+
+and therefore produce:
+
+```text
+A → 0.32
+B → 0.96
+```
+
+because B actually **answers the question**.
+
+This distinction is extremely valuable in enterprise RAG.
+
+---
+
+# 13. But cross-encoders are slow
+
+This is the tradeoff.
+
+Suppose you retrieve:
+
+```text
+100 candidates
+```
+
+You need approximately:
+
+```text
+100 query-document pairs
+```
+
+and the model processes those pairs.
+
+Compare this with vector retrieval:
+
+```text
+10 million precomputed vectors
+        ↓
+one query vector
+        ↓
+ANN search
+        ↓
+Top 100
+```
+
+That's why you use:
+
+```text
+               Large corpus
+                    │
+                    ▼
+              Fast Retriever
+                    │
+                 Top 100
+                    │
+                    ▼
+             Cross-Encoder
+                    │
+                  Top 10
+```
+
+This is usually called **two-stage retrieval** or **retrieve-then-rerank**.
+
+---
+
+# 14. How this fits your Enterprise Knowledge Agent
+
+Your pipeline becomes:
+
+```text
+User Query
+    │
+    ▼
+LangGraph Reasoner
+    │
+    ▼
+Tool Node
+    │
+    ├──── Vector Search ────┐
+    │                       │
+    ├──── BM25 ─────────────┤
+    │                       │
+    └──── Graph RAG ────────┘
+                            │
+                            ▼
+                    Candidate Pool
+                    e.g. 50 chunks
+                            │
+                            ▼
+                  ┌─────────────────┐
+                  │ Cross-Encoder   │
+                  │                 │
+                  │ Q + Chunk       │
+                  │       ↓         │
+                  │ relevance       │
+                  └────────┬────────┘
+                           │
+                           ▼
+                      Reranking
+                           │
+                           ▼
+                       Top 5–10
+                           │
+                           ▼
+                   EvidenceEvaluator
+                           │
+                           ▼
+                    AnswerGenerator
+```
+
+This is particularly useful because your system intentionally combines **vector, keyword, and graph retrieval**.
+
+---
+
+# 15. Reranking vs retrieval
+
+This distinction is very important for your project/interviews.
+
+### Retrieval
+
+Question:
+
+> **"Which documents could possibly answer this query?"**
+
+Goal:
+
+**Recall**
+
+```text
+Don't miss useful information.
+```
+
+Example:
+
+```text
+10,000,000 documents
+        ↓
+    Retriever
+        ↓
+      100
+```
+
+---
+
+### Reranking
+
+Question:
+
+> **"Among these candidates, which ones are actually most relevant?"**
+
+Goal:
+
+**Precision**
+
+```text
+100 candidates
+      ↓
+Cross Encoder
+      ↓
+10 best
+```
+
+---
+
+### Generation
+
+Question:
+
+> **"How do I answer the user's question using this evidence?"**
+
+Goal:
+
+**Grounded answer generation**
+
+```text
+10 evidence chunks
+       ↓
+      LLM
+       ↓
+Answer + citations
+```
+
+---
+
+# 16. A very important point: reranker doesn't replace embeddings
+
+You still need your embedding retrieval.
+
+Think of the two models as having different jobs:
+
+| Component          | Job                                  |
+| ------------------ | ------------------------------------ |
+| Embedding model    | Find potentially relevant candidates |
+| BM25               | Find lexical/exact matches           |
+| Graph RAG          | Find relational/multi-hop candidates |
+| Cross-encoder      | Precisely rank candidates            |
+| Evidence evaluator | Validate evidence                    |
+| LLM                | Generate answer                      |
+
+So your architecture is not:
+
+```text
+Embedding → Cross Encoder → LLM
+```
+
+only.
+
+It's:
+
+```text
+                Query
+                  │
+        ┌─────────┼─────────┐
+        ▼         ▼         ▼
+      Vector     BM25     Graph
+        │         │         │
+        └─────────┼─────────┘
+                  ▼
+            Candidate Pool
+                  │
+                  ▼
+            Cross-Encoder
+                  │
+                  ▼
+              Reranker
+                  │
+                  ▼
+          Evidence Evaluator
+                  │
+                  ▼
+            Answer Generator
+```
+
+---
+
+# 17. One subtle but important thing about your `sigmoid`
+
+You proposed:
+
+```python
+score = sigmoid(raw_score)
+```
+
+Mathematically:
+
+$$
+score = \frac{1}{1+e^{-x}}
+$$
+
+This maps:
+
+```text
+(-∞, +∞)
+```
+
+to:
+
+```text
+(0, 1)
+```
+
+So you can conveniently say:
+
+```text
+0.95 → highly relevant
+0.20 → probably irrelevant
+```
+
+But don't describe the output as a **true probability of relevance** unless the model has been calibrated for that interpretation.
+
+For your implementation, I'd call it:
+
+> **normalized relevance score**
+
+rather than:
+
+> probability that the document is relevant.
+
+That's more technically accurate.
+
+---
+
+# 18. The entire concept in one example
+
+User:
+
+> **"Which database does the Payment Service use?"**
+
+### Stage 1
+
+```text
+Vector:
+Payment architecture       0.89
+Payment deployment         0.86
+Database migration         0.83
+
+BM25:
+PAY-482                    12.3
+Payment PostgreSQL         11.8
+
+Graph:
+Payment Service → DB       distance 1
+Payment Service → Team     distance 2
+```
+
+After fusion:
+
+```text
+20 candidate chunks
+```
+
+### Stage 2 — Cross Encoder
+
+Each becomes:
+
+```text
+(
+ "Which database does the Payment Service use?",
+ "The Payment Service uses PostgreSQL..."
+)
+```
+
+The model produces:
+
+```text
+chunk 17 → 0.97
+chunk 4  → 0.91
+chunk 8  → 0.63
+chunk 12 → 0.31
+...
+```
+
+Reranker returns:
+
+```text
+1. chunk 17 → 0.97
+2. chunk 4  → 0.91
+3. chunk 8  → 0.63
+```
+
+Then the evaluator sees only these high-value pieces.
+
+---
+
+## The mental model to remember
+
+```text
+                 RETRIEVER
+        "Find things that might help"
+                       │
+                       ▼
+              50–100 candidates
+                       │
+                       ▼
+              CROSS-ENCODER
+       "Read query + candidate together"
+                       │
+                       ▼
+               relevance scores
+                       │
+                       ▼
+                 RERANKER
+          "Sort + filter candidates"
+                       │
+                       ▼
+                 Top 5–10
+                       │
+                       ▼
+              EVIDENCE EVALUATOR
+             "Is this evidence good?"
+                       │
+                       ▼
+                 LLM GENERATOR
+                "Write the answer"
+```
+
+**In short:** a cross-encoder is powerful because it doesn't merely ask _"are these two texts semantically similar?"_ It processes the **query and candidate together**, allowing attention to capture whether the candidate actually addresses the specific information need. The **reranker wraps this scoring process into a retrieval component that sorts and filters the candidate evidence before the expensive reasoning/generation stages.**

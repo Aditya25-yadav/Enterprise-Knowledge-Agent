@@ -1527,3 +1527,48 @@ This document maintains a chronological record of all architectural decisions, c
 - [`docs/phases.md`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/docs/phases.md)
 - [`claude.md`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/claude.md)
 
+---
+
+## Step 75: Implemented Local Cross-Encoder Reranker & 6-Node LangGraph Integration (Phase 9)
+- **Date:** 2026-09-22
+- **Time:** 19:54 IST
+- **Purpose:** Implemented local in-process cross-encoder re-scoring (`CrossEncoderReranker`), calibrated probability scaling via logistic sigmoid normalization, noise threshold filtering, and integrated a dedicated `reranker` node into the LangGraph state machine (`tool_node` $\to$ `reranker` $\to$ `evaluator`).
+
+### Key Implementation & Verification Highlights:
+1. **Ranking Data Models (`backend/ranking/models.py`)**:
+   - `RerankResult`: Captures `chunk_id`, `text`, calibrated `score` ($0.0 \dots 1.0$), `original_rank`, `new_rank`, `title`, `source`, `metadata`, and `chunk_dict`.
+   - `RerankRequest`: Standard batch reranking request container.
+2. **Local Cross-Encoder Engine (`backend/ranking/reranker.py`)**:
+   - Built with `sentence_transformers.CrossEncoder` (default: `cross-encoder/ms-marco-MiniLM-L-6-v2` or `BAAI/bge-reranker-base`).
+   - Offline-safe loading with `local_files_only=True` when `HF_HUB_OFFLINE=1`.
+   - `format_chunk_for_reranking()`: Enriches chunk representations with Document Title, Breadcrumb Hierarchy, Sequence Step progress, Source platform, and raw content.
+   - Logistic Sigmoid Normalization: Maps raw unbounded cross-attention logits to calibrated $[0.0, 1.0]$ probabilities.
+   - Resilient in-process token-overlap and semantic cross-scorer fallback for offline/test environments.
+   - `rerank()` and `rerank_dicts()` APIs with `score_threshold` filtering and `top_k` truncation.
+3. **LangGraph 6-Node State Machine (`backend/agent/langgraph_planner.py` & `backend/agent/state.py`)**:
+   - State schema enhanced with `rerank_scores: Dict[str, float]` and `rerank_applied: bool`.
+   - Added `_reranker_node` between `tool_node` and `evaluator`: `START` $\to$ `reasoner` $\to$ `tool_node` $\to$ `reranker` $\to$ `evaluator` $\to$ `generator` / `reformulator` $\to$ `reasoner`.
+   - Ensures only high-precision, re-ordered evidence reaches the `EvidenceEvaluator` and `AnswerGenerator`.
+4. **Testing & Verification**:
+   - `backend/ranking/tests/test_reranker.py`: **9/9 Passed** ✅.
+   - `backend/agent/tests/test_langgraph_agent.py`: **13/13 Passed** ✅ (verifying 6-node compilation and reranker node execution in loop).
+   - System Unit Tests: **80/80 Passed** ✅ across all suites.
+   - End-to-End Verification Script: [`scripts/verify_phase9.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/scripts/verify_phase9.py) executed with exit code 0.
+   - Technical Documentation: [`docs/verify_phase9.md`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/docs/verify_phase9.md) and [`scripts/verify_phase9.md`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/scripts/verify_phase9.md).
+   - Updated [`docs/phases.md`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/docs/phases.md) marking Phase 9 complete.
+
+### Files Created / Modified:
+- [`backend/ranking/models.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/ranking/models.py) (Created)
+- [`backend/ranking/reranker.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/ranking/reranker.py) (Created)
+- [`backend/ranking/__init__.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/ranking/__init__.py) (Created)
+- [`backend/ranking/tests/test_reranker.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/ranking/tests/test_reranker.py) (Created)
+- [`backend/agent/state.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/agent/state.py) (Updated)
+- [`backend/agent/langgraph_planner.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/agent/langgraph_planner.py) (Updated)
+- [`backend/agent/tests/test_langgraph_agent.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/agent/tests/test_langgraph_agent.py) (Updated)
+- [`scripts/verify_phase9.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/scripts/verify_phase9.py) (Created)
+- [`docs/verify_phase9.md`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/docs/verify_phase9.md) (Created)
+- [`scripts/verify_phase9.md`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/scripts/verify_phase9.md) (Created)
+- [`docs/phases.md`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/docs/phases.md) (Updated)
+- [`claude.md`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/claude.md) (Updated)
+
+

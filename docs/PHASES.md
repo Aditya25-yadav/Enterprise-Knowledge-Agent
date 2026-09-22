@@ -308,17 +308,17 @@ The **Enterprise Knowledge Agent** is an autonomous, agentic RAG and knowledge i
 
 ### Phase 9: Local Cross-Encoder Reranker
 
-- **Status:** 🟡 In Implementation
+- **Status:** ✅ Complete & Verified
 - **Goal:** Local cross-encoder re-scoring of candidate chunks retrieved from Stage 1 (vector, BM25, graph) to calibrate relevance scores, reject noise, and re-order evidence before passing to the evaluator and LLM generator.
 
-#### Planned Architecture:
+#### Key Implementations:
 1. **Cross-Encoder Scoring Engine (`backend/ranking/reranker.py`):**
    - Utilizes `sentence_transformers.CrossEncoder` with `cross-encoder/ms-marco-MiniLM-L-6-v2` or `BAAI/bge-reranker-base`.
    - Sigmoid score normalization producing calibrated $[0.0, 1.0]$ probabilities.
    - Configurable `score_threshold` for noise filtering.
    - Resilient in-process fallback cross-scorer for offline environments.
 2. **LangGraph State Machine Integration (`backend/agent/langgraph_planner.py`):**
-   - Dedicated `reranker` node: `tool_node` $\to$ `reranker` $\to$ `evaluator`.
+   - Dedicated `reranker` node: `START` $\to$ `reasoner` $\to$ `tool_node` $\to$ `reranker` $\to$ `evaluator` $\to$ `generator` / `reformulator` $\to$ `reasoner`.
    - Updates `retrieved_chunks` ordered descending by `rerank_score`.
 
 ---
@@ -344,7 +344,7 @@ The **Enterprise Knowledge Agent** is an autonomous, agentic RAG and knowledge i
 | **Phase 6** | Entity Graph & Cypher | `backend/retrieval/tests/` | `scripts/verify_phase6.py` | ✅ Passed |
 | **Phase 7** | Evidence Evaluator & Self-RAG | `backend/evaluation/tests/` | `scripts/verify_phase7.py` | ✅ Passed |
 | **Phase 8** | RBAC Resolver & Translators | `backend/security/tests/` (32/32) | `scripts/verify_phase8.py` | ✅ Passed |
-| **Phase 9** | Local Cross-Encoder Reranker | `backend/ranking/tests/` | `scripts/verify_phase9.py` | 🟡 Pending |
+| **Phase 9** | Local Cross-Encoder Reranker | `backend/ranking/tests/` (9/9) | `scripts/verify_phase9.py` | ✅ Passed |
 | **Phase 10** | Hybrid Search Fusion (RRF) | `backend/retrieval/tests/` | `scripts/verify_phase10.py` | ⚪ Planned |
 
 ---
