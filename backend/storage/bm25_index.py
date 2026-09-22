@@ -164,18 +164,15 @@ class BM25Index:
         user_groups: Optional[List[str]] = None,
         source: Optional[str] = None,
         resource_type: Optional[str] = None,
+        user_context: Optional[Dict[str, Any]] = None,
     ) -> List[Dict[str, Any]]:
         """
         Executes BM25 keyword search with strict RBAC access pre-filtering.
-
-        RBAC Rule: A chunk is returned IF:
-          (is_public == True) OR
-          (allowed_roles matches user_roles) OR
-          (allowed_users matches user_id) OR
-          (allowed_groups matches user_groups)
         """
         if not self._bm25 or not query or not query.strip():
             return []
+
+        from backend.security import BM25FilterTranslator, get_default_rbac_resolver
 
         query_tokens = self.tokenize(query)
         if not query_tokens:
@@ -184,10 +181,20 @@ class BM25Index:
         query_tokens_set = set(query_tokens)
         scores = self._bm25.get_scores(query_tokens)
 
+        # Build security context and predicate evaluator
+        if user_context is not None:
+            sec_ctx = get_default_rbac_resolver().resolve_context(user_context)
+        else:
+            sec_ctx = get_default_rbac_resolver().resolve_context({
+                "roles": user_roles or ["employee"],
+                "user_id": user_id,
+                "groups": user_groups or [],
+            })
+
+        can_access = BM25FilterTranslator.create_predicate(sec_ctx)
+
         # Filter by RBAC and metadata
         candidates = []
-        user_roles_set = set(user_roles or [])
-        user_groups_set = set(user_groups or [])
 
         for idx, score in enumerate(scores):
             doc_tokens = set(self.tokenized_corpus[idx])
@@ -204,20 +211,8 @@ class BM25Index:
             if resource_type and payload.get("resource_type", "").lower() != resource_type.lower():
                 continue
 
-            # 2. RBAC Access Control Filter
-            is_public = payload.get("is_public", True)
-            allowed_roles = set(payload.get("allowed_roles") or [])
-            allowed_users = payload.get("allowed_users") or []
-            allowed_groups = set(payload.get("allowed_groups") or [])
-
-            can_access = (
-                is_public
-                or bool(user_roles_set.intersection(allowed_roles))
-                or (user_id and user_id in allowed_users)
-                or bool(user_groups_set.intersection(allowed_groups))
-            )
-
-            if not can_access:
+            # 2. RBAC Access Control Filter via Centralized Predicate
+            if not can_access(payload):
                 continue
 
             item = dict(payload)

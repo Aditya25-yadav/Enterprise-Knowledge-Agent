@@ -159,73 +159,30 @@ class QdrantVectorStore:
         source: Optional[str] = None,
         resource_type: Optional[str] = None,
         collection_name: Optional[str] = None,
+        user_context: Optional[Dict[str, Any]] = None,
     ) -> List[Dict[str, Any]]:
         """
         Performs vector similarity search with strict RBAC access pre-filtering.
-
-        RBAC Rule: A chunk is returned IF:
-          (is_public == True) OR
-          (allowed_roles matches user_roles) OR
-          (allowed_users matches user_id) OR
-          (allowed_groups matches user_groups)
         """
-        from qdrant_client.http import models as rest
+        from backend.security import QdrantFilterTranslator, get_default_rbac_resolver
 
         col_name = collection_name or self.collection_name
-        filter_conditions: List[rest.Condition] = []
+        
+        # Build normalized UserSecurityContext
+        if user_context is not None:
+            sec_ctx = get_default_rbac_resolver().resolve_context(user_context)
+        else:
+            sec_ctx = get_default_rbac_resolver().resolve_context({
+                "roles": user_roles or ["employee"],
+                "user_id": user_id,
+                "groups": user_groups or [],
+            })
 
-        # 1. Source platform filter (optional)
-        if source:
-            filter_conditions.append(
-                rest.FieldCondition(
-                    key="source",
-                    match=rest.MatchValue(value=source.lower()),
-                )
-            )
-
-        # 2. Resource type filter (optional)
-        if resource_type:
-            filter_conditions.append(
-                rest.FieldCondition(
-                    key="resource_type",
-                    match=rest.MatchValue(value=resource_type.lower()),
-                )
-            )
-
-        # 3. RBAC Pre-Filter
-        rbac_should_clauses: List[rest.Condition] = [
-            # Public content is accessible to all
-            rest.FieldCondition(key="is_public", match=rest.MatchValue(value=True)),
-        ]
-
-        if user_roles:
-            rbac_should_clauses.append(
-                rest.FieldCondition(
-                    key="allowed_roles",
-                    match=rest.MatchAny(any=user_roles),
-                )
-            )
-
-        if user_id:
-            rbac_should_clauses.append(
-                rest.FieldCondition(
-                    key="allowed_users",
-                    match=rest.MatchValue(value=user_id),
-                )
-            )
-
-        if user_groups:
-            rbac_should_clauses.append(
-                rest.FieldCondition(
-                    key="allowed_groups",
-                    match=rest.MatchAny(any=user_groups),
-                )
-            )
-
-        # Add RBAC should filter (at least one must match)
-        filter_conditions.append(rest.Filter(should=rbac_should_clauses))
-
-        search_filter = rest.Filter(must=filter_conditions)
+        search_filter = QdrantFilterTranslator.build_filter(
+            context=sec_ctx,
+            source=source,
+            resource_type=resource_type,
+        )
 
         # Execute vector search
         if hasattr(self._client, "query_points"):

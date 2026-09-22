@@ -1,18 +1,20 @@
 """
-Test Suite for LangGraph-Orchestrated Enterprise Agent (Phase 4, 5 & 6).
+Test Suite for LangGraph-Orchestrated Enterprise Agent with Self-RAG Reflection (Phase 4, 5, 6 & 7).
 
 Validates:
-  1. LangGraph StateGraph compilation and state transitions.
-  2. Multi-turn reasoning loop via LangGraph (reasoner -> tool_node -> reasoner -> generator).
+  1. LangGraph StateGraph compilation and 5-node state transitions (reasoner, tool_node, evaluator, reformulator, generator).
+  2. Single-turn autonomous retrieval with quality evaluation.
   3. Multi-tool execution in a single turn (semantic_search + keyword_search).
   4. Integration with SemanticRetriever, KeywordRetriever, ResourceLookupRetriever & GraphRetriever.
-  5. Multi-hop reasoning (e.g. search -> graph_traversal / resource_lookup -> answer).
+  5. Multi-hop reasoning loop via Self-RAG reflection (evaluator -> reformulator -> reasoner -> generator).
   6. RBAC context propagation through LangGraph AgentState across all tools.
-  7. Native LangChain BaseTool execution with Pydantic validation across all 4 modalities.
+  7. Native LangChain BaseTool execution with Pydantic validation across all modalities.
+  8. Graceful termination and fallback when max retrieval attempts are reached.
 """
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 import unittest
@@ -71,7 +73,16 @@ class MockGitHubEntityLLMForLangGraph(LLMProvider):
 
     def generate(self, messages: List[Message]) -> str:
         self.call_history.append(messages)
-        return "PR #142 was authored by alice and reviewed by bob [1]."
+        last_content = messages[-1].content if messages else ""
+        if "Evaluate the evidence above" in last_content:
+            return json.dumps({
+                "relevance_score": 1.0,
+                "evidence_sufficient": True,
+                "missing_information": [],
+                "recommended_action": "GENERATE",
+                "reasoning": "Retrieved author, reviewer, and status for PR #142.",
+            })
+        return "PR #142 'Fix 3DS timeout in Checkout Flow' was created by alice and approved by bob [1]."
 
     def generate_with_tools(
         self,
@@ -79,10 +90,6 @@ class MockGitHubEntityLLMForLangGraph(LLMProvider):
         tools: List[ToolDefinition],
     ) -> LLMResponse:
         self.call_history.append(messages)
-        if messages and messages[-1].role == MessageRole.TOOL_RESULT:
-            return LLMResponse(
-                content="PR #142 'Fix 3DS timeout in Checkout Flow' was created by alice and approved by bob [1]."
-            )
         return LLMResponse(
             tool_calls=[
                 ToolCall(
@@ -111,7 +118,16 @@ class MockLLMForLangGraph(LLMProvider):
 
     def generate(self, messages: List[Message]) -> str:
         self.call_history.append(messages)
-        return "Based on [1], you should call POST /v1/payments/initiate."
+        last_content = messages[-1].content if messages else ""
+        if "Evaluate the evidence above" in last_content:
+            return json.dumps({
+                "relevance_score": 0.95,
+                "evidence_sufficient": True,
+                "missing_information": [],
+                "recommended_action": "GENERATE",
+                "reasoning": "Evidence contains complete API endpoint details for initiating payment.",
+            })
+        return "To initialize a payment, call POST /v1/payments/initiate with amount and customer_id [1]."
 
     def generate_with_tools(
         self,
@@ -119,14 +135,6 @@ class MockLLMForLangGraph(LLMProvider):
         tools: List[ToolDefinition],
     ) -> LLMResponse:
         self.call_history.append(messages)
-
-        # If previous turn was a TOOL_RESULT, generate final answer
-        if messages and messages[-1].role == MessageRole.TOOL_RESULT:
-            return LLMResponse(
-                content="To initialize a payment, call POST /v1/payments/initiate with amount and customer_id [1]."
-            )
-
-        # Turn 1: request semantic_search tool
         return LLMResponse(
             tool_calls=[
                 ToolCall(
@@ -152,7 +160,16 @@ class MockMultiToolLLMForLangGraph(LLMProvider):
 
     def generate(self, messages: List[Message]) -> str:
         self.call_history.append(messages)
-        return "Payment bug PAY-928 is resolved by checking token timeout [1], following the payments guide [2]."
+        last_content = messages[-1].content if messages else ""
+        if "Evaluate the evidence above" in last_content:
+            return json.dumps({
+                "relevance_score": 1.0,
+                "evidence_sufficient": True,
+                "missing_information": [],
+                "recommended_action": "GENERATE",
+                "reasoning": "Retrieved both bug PAY-928 and payment API documentation.",
+            })
+        return "Bug PAY-928 describes a 3DS timeout in the checkout flow [1]. Per the API documentation [2], transactions must be initiated via POST /v1/payments/initiate."
 
     def generate_with_tools(
         self,
@@ -160,14 +177,6 @@ class MockMultiToolLLMForLangGraph(LLMProvider):
         tools: List[ToolDefinition],
     ) -> LLMResponse:
         self.call_history.append(messages)
-
-        # If previous turn was a TOOL_RESULT, generate final answer synthesizing both tools
-        if messages and messages[-1].role == MessageRole.TOOL_RESULT:
-            return LLMResponse(
-                content="Bug PAY-928 describes a 3DS timeout in the checkout flow [1]. Per the API documentation [2], transactions must be initiated via POST /v1/payments/initiate."
-            )
-
-        # Turn 1: request BOTH keyword_search AND semantic_search in a single turn!
         return LLMResponse(
             tool_calls=[
                 ToolCall(
@@ -196,7 +205,16 @@ class MockResourceLookupLLMForLangGraph(LLMProvider):
 
     def generate(self, messages: List[Message]) -> str:
         self.call_history.append(messages)
-        return "Based on [1], the Payments API guide specifies POST /v1/payments/initiate."
+        last_content = messages[-1].content if messages else ""
+        if "Evaluate the evidence above" in last_content:
+            return json.dumps({
+                "relevance_score": 0.95,
+                "evidence_sufficient": True,
+                "missing_information": [],
+                "recommended_action": "GENERATE",
+                "reasoning": "Fetched complete Payments API Guide document.",
+            })
+        return "According to the Payments API Guide [1], transaction initiation requires sending amount, currency, and customer_id."
 
     def generate_with_tools(
         self,
@@ -204,10 +222,6 @@ class MockResourceLookupLLMForLangGraph(LLMProvider):
         tools: List[ToolDefinition],
     ) -> LLMResponse:
         self.call_history.append(messages)
-        if messages and messages[-1].role == MessageRole.TOOL_RESULT:
-            return LLMResponse(
-                content="According to the Payments API Guide [1], transaction initiation requires sending amount, currency, and customer_id."
-            )
         return LLMResponse(
             tool_calls=[
                 ToolCall(
@@ -231,7 +245,16 @@ class MockGraphTraversalLLMForLangGraph(LLMProvider):
 
     def generate(self, messages: List[Message]) -> str:
         self.call_history.append(messages)
-        return "The repository contains child files [1]."
+        last_content = messages[-1].content if messages else ""
+        if "Evaluate the evidence above" in last_content:
+            return json.dumps({
+                "relevance_score": 0.9,
+                "evidence_sufficient": True,
+                "missing_information": [],
+                "recommended_action": "GENERATE",
+                "reasoning": "Retrieved child documents under repository root.",
+            })
+        return "The repository contains child files including Payments API Guide [1]."
 
     def generate_with_tools(
         self,
@@ -239,10 +262,6 @@ class MockGraphTraversalLLMForLangGraph(LLMProvider):
         tools: List[ToolDefinition],
     ) -> LLMResponse:
         self.call_history.append(messages)
-        if messages and messages[-1].role == MessageRole.TOOL_RESULT:
-            return LLMResponse(
-                content="The repository contains documentation and API specs [1]."
-            )
         return LLMResponse(
             tool_calls=[
                 ToolCall(
@@ -261,8 +280,11 @@ class MockMultiHopLLMForLangGraph(LLMProvider):
     """
     Deterministic mock LLM for multi-hop reasoning across multiple turns:
     Turn 1: Semantic search to locate runbook section.
-    Turn 2: Graph traversal to get all children/sections under parent wiki.
-    Turn 3: Grounded final answer synthesizing all steps.
+    Evaluator: Inspected evidence is incomplete, suggests `graph_traversal`.
+    Reformulator: Generates query to discover child documents.
+    Turn 2: Graph traversal to get all child sections under parent wiki.
+    Evaluator: Evidence is sufficient, suggests `GENERATE`.
+    Generator: Grounded final answer synthesizing all steps.
     """
 
     def __init__(self) -> None:
@@ -274,7 +296,39 @@ class MockMultiHopLLMForLangGraph(LLMProvider):
 
     def generate(self, messages: List[Message]) -> str:
         self.call_history.append(messages)
-        return "Full disaster recovery procedure: Step 1 drain traffic, Step 2 restart worker, Step 3 verify health [1] [2]."
+        last_content = messages[-1].content if messages else ""
+
+        # Evaluation Prompt
+        if "Evaluate the evidence above" in last_content:
+            tool_results = [m for m in messages if m.role == MessageRole.TOOL_RESULT]
+            if len(tool_results) <= 1:
+                return json.dumps({
+                    "relevance_score": 0.8,
+                    "evidence_sufficient": False,
+                    "missing_information": ["Detailed child sequence steps under engineering wiki"],
+                    "recommended_action": "RETRIEVE_MORE",
+                    "recommended_tool": "graph_traversal",
+                    "reasoning": "Found parent runbook, but child sequence steps need to be traversed.",
+                })
+            else:
+                return json.dumps({
+                    "relevance_score": 1.0,
+                    "evidence_sufficient": True,
+                    "missing_information": [],
+                    "recommended_action": "GENERATE",
+                    "reasoning": "All disaster recovery steps gathered.",
+                })
+
+        # Query Reformulation Prompt
+        if "Generate a targeted retrieval query for the next turn" in last_content:
+            return json.dumps({
+                "reformulated_query": "engineering wiki disaster recovery children",
+                "reasoning": "Retrieve child documents under engineering wiki.",
+                "suggested_tool": "graph_traversal",
+            })
+
+        # Answer Generation Prompt
+        return "The Disaster Recovery Runbook [1] requires three steps: 1) Drain ingress traffic, 2) Restart payment worker, and 3) Verify gateway health [2]."
 
     def generate_with_tools(
         self,
@@ -282,8 +336,8 @@ class MockMultiHopLLMForLangGraph(LLMProvider):
         tools: List[ToolDefinition],
     ) -> LLMResponse:
         self.call_history.append(messages)
-
         tool_results = [m for m in messages if m.role == MessageRole.TOOL_RESULT]
+
         if len(tool_results) == 0:
             # Turn 1: Search for runbook
             return LLMResponse(
@@ -295,7 +349,7 @@ class MockMultiHopLLMForLangGraph(LLMProvider):
                     )
                 ]
             )
-        elif len(tool_results) == 1:
+        else:
             # Turn 2: Traverse graph to retrieve full child documents under engineering wiki
             return LLMResponse(
                 tool_calls=[
@@ -309,11 +363,142 @@ class MockMultiHopLLMForLangGraph(LLMProvider):
                     )
                 ]
             )
-        else:
-            # Turn 3: Final grounded answer
+
+
+class MockSelfRAGReflectionLLM(LLMProvider):
+    """
+    Deterministic mock LLM specifically for testing Self-RAG reflection:
+    Turn 1: Semantic search retrieves PR title, but lacks reviewer info.
+    Evaluator: Returns REFORMULATE, missing PR reviewers, recommends github_entity_search.
+    Reformulator: Returns 'get PR #142 details'.
+    Turn 2: github_entity_search retrieves PR details.
+    Evaluator: Returns GENERATE.
+    Generator: Formulates answer with alice and bob.
+    """
+
+    def __init__(self) -> None:
+        self.call_history: List[List[Message]] = []
+
+    @property
+    def provider_name(self) -> str:
+        return "mock/self-rag-reflection-llm"
+
+    def generate(self, messages: List[Message]) -> str:
+        self.call_history.append(messages)
+        last_content = messages[-1].content if messages else ""
+
+        if "Evaluate the evidence above" in last_content:
+            tool_results = [m for m in messages if m.role == MessageRole.TOOL_RESULT]
+            if len(tool_results) <= 1:
+                return json.dumps({
+                    "relevance_score": 0.7,
+                    "evidence_sufficient": False,
+                    "missing_information": ["Reviewer approval status for PR #142"],
+                    "recommended_action": "REFORMULATE",
+                    "recommended_tool": "github_entity_search",
+                    "reasoning": "Found the PR title, but missing reviewer approvals.",
+                })
+            else:
+                return json.dumps({
+                    "relevance_score": 1.0,
+                    "evidence_sufficient": True,
+                    "missing_information": [],
+                    "recommended_action": "GENERATE",
+                    "reasoning": "Full PR metadata with author and reviewers obtained.",
+                })
+
+        if "Generate a targeted retrieval query for the next turn" in last_content:
+            return json.dumps({
+                "reformulated_query": "get PR #142 details",
+                "reasoning": "Fetch complete PR reviewer info.",
+                "suggested_tool": "github_entity_search",
+            })
+
+        return "PR #142 was authored by alice and reviewed and approved by bob [1]."
+
+    def generate_with_tools(
+        self,
+        messages: List[Message],
+        tools: List[ToolDefinition],
+    ) -> LLMResponse:
+        self.call_history.append(messages)
+        tool_results = [m for m in messages if m.role == MessageRole.TOOL_RESULT]
+
+        if len(tool_results) == 0:
             return LLMResponse(
-                content="The Disaster Recovery Runbook [1] requires three steps: 1) Drain ingress traffic, 2) Restart payment worker, and 3) Verify gateway health [2]."
+                tool_calls=[
+                    ToolCall(
+                        tool_name="semantic_search",
+                        arguments={"query": "checkout timeout PR"},
+                        call_id="call_sr_1",
+                    )
+                ]
             )
+        else:
+            return LLMResponse(
+                tool_calls=[
+                    ToolCall(
+                        tool_name="github_entity_search",
+                        arguments={
+                            "operation": "get_pr_details",
+                            "target": "#142",
+                        },
+                        call_id="call_sr_2",
+                    )
+                ]
+            )
+
+
+class MockMaxAttemptsLLM(LLMProvider):
+    """
+    Deterministic mock LLM that always returns INSUFFICIENT to test max_retrieval_attempts cutoff.
+    """
+
+    def __init__(self) -> None:
+        self.call_history: List[List[Message]] = []
+
+    @property
+    def provider_name(self) -> str:
+        return "mock/max-attempts-llm"
+
+    def generate(self, messages: List[Message]) -> str:
+        self.call_history.append(messages)
+        last_content = messages[-1].content if messages else ""
+
+        if "Evaluate the evidence above" in last_content:
+            return json.dumps({
+                "relevance_score": 0.3,
+                "evidence_sufficient": False,
+                "missing_information": ["Missing critical production architecture diagram"],
+                "recommended_action": "RETRIEVE_MORE",
+                "recommended_tool": "semantic_search",
+                "reasoning": "Evidence is still insufficient.",
+            })
+
+        if "Generate a targeted retrieval query for the next turn" in last_content:
+            return json.dumps({
+                "reformulated_query": "production architecture diagram fallback",
+                "reasoning": "Searching again.",
+                "suggested_tool": "semantic_search",
+            })
+
+        return "Best effort answer based on available evidence: payments worker architecture [1]."
+
+    def generate_with_tools(
+        self,
+        messages: List[Message],
+        tools: List[ToolDefinition],
+    ) -> LLMResponse:
+        self.call_history.append(messages)
+        return LLMResponse(
+            tool_calls=[
+                ToolCall(
+                    tool_name="semantic_search",
+                    arguments={"query": "payment architecture diagram"},
+                    call_id="call_max_att",
+                )
+            ]
+        )
 
 
 class TestLangGraphAgent(unittest.TestCase):
@@ -480,6 +665,7 @@ Query `/healthz` endpoint to confirm 200 OK status.
         self.bm25_index.clear()
 
     def test_01_graph_compilation(self) -> None:
+        """Verifies StateGraph structure with all 5 nodes compiled."""
         mock_llm = MockLLMForLangGraph()
         planner = LangGraphAgentPlanner(
             llm_provider=mock_llm,
@@ -490,9 +676,12 @@ Query `/healthz` endpoint to confirm 200 OK status.
         nodes = planner.graph.nodes
         self.assertIn("reasoner", nodes)
         self.assertIn("tool_node", nodes)
+        self.assertIn("evaluator", nodes)
+        self.assertIn("reformulator", nodes)
         self.assertIn("generator", nodes)
 
     def test_02_autonomous_langgraph_tool_loop(self) -> None:
+        """Tests single-turn retrieval with evaluator quality verification and synthesis."""
         mock_llm = MockLLMForLangGraph()
         planner = LangGraphAgentPlanner(
             llm_provider=mock_llm,
@@ -505,7 +694,7 @@ Query `/healthz` endpoint to confirm 200 OK status.
             user_context={"roles": ["engineer"], "user_id": "eng@company.com"},
         )
 
-        # 1. Verify tool was called in Turn 1
+        # 1. Verify tool was called
         self.assertGreaterEqual(len(result["tool_calls"]), 1)
         self.assertEqual(result["tool_calls"][0]["tool"], "semantic_search")
         self.assertEqual(result["tool_calls"][0]["arguments"]["query"], "initialize payment intent API")
@@ -518,11 +707,12 @@ Query `/healthz` endpoint to confirm 200 OK status.
         self.assertIn("[1]", result["answer"])
         self.assertEqual(len(result["citations"]), len(result["retrieved_chunks"]))
 
-        # 4. Verify turn count
-        self.assertEqual(result["turns"], 2)
+        # 4. Verify evaluator validated evidence
+        self.assertIsNotNone(result["evaluation"])
+        self.assertTrue(result["evaluation"]["evidence_sufficient"])
 
     def test_03_langgraph_rbac_isolation(self) -> None:
-        # Ingest restricted document
+        """Verifies database-level RBAC filtering across agent retrieval."""
         secret_doc = OKFConcept(
             type="Secret",
             title="Vault Master Key",
@@ -550,6 +740,7 @@ Query `/healthz` endpoint to confirm 200 OK status.
         self.assertFalse(any("AES-256-GCM-SECRET-9999" in r.get("text", "") for r in guest_res["retrieved_chunks"]))
 
     def test_04_native_langchain_tools_execution(self) -> None:
+        """Tests individual native LangChain BaseTool execution with Pydantic validation."""
         lc_tools = create_langchain_tools(
             semantic_retriever=self.retriever,
             keyword_retriever=self.keyword_retriever,
@@ -590,9 +781,7 @@ Query `/healthz` endpoint to confirm 200 OK status.
 
     def test_05_multi_tool_execution_in_single_turn(self) -> None:
         """
-        Tests that when the LLM emits multiple tool calls in a single turn
-        (keyword_search + semantic_search), LangGraph executes both in _tool_node,
-        aggregates chunks from both tools, and synthesizes a grounded answer.
+        Tests multi-tool execution in a single turn (keyword_search + semantic_search).
         """
         mock_multitool_llm = MockMultiToolLLMForLangGraph()
         planner = LangGraphAgentPlanner(
@@ -614,14 +803,13 @@ Query `/healthz` endpoint to confirm 200 OK status.
 
         # 2. Verify evidence was retrieved from BOTH sources
         retrieved_titles = [c.get("title") for c in result["retrieved_chunks"]]
-        self.assertTrue(any("PAY-928" in t for t in retrieved_titles), "Expected PAY-928 chunk in retrieved evidence")
-        self.assertTrue(any("Payments API Guide" in t for t in retrieved_titles), "Expected Payments API Guide in retrieved evidence")
+        self.assertTrue(any("PAY-928" in t for t in retrieved_titles))
+        self.assertTrue(any("Payments API Guide" in t for t in retrieved_titles))
 
         # 3. Verify grounded answer references both [1] and [2]
         self.assertIn("PAY-928", result["answer"])
         self.assertIn("[1]", result["answer"])
         self.assertIn("[2]", result["answer"])
-        self.assertEqual(result["turns"], 2)
 
     def test_06_native_keyword_search_langchain_tool(self) -> None:
         """
@@ -669,7 +857,6 @@ Query `/healthz` endpoint to confirm 200 OK status.
         # 3. Verify final answer
         self.assertIn("Payments API Guide", result["answer"])
         self.assertIn("[1]", result["answer"])
-        self.assertEqual(result["turns"], 2)
 
     def test_08_graph_traversal_in_langgraph_loop(self) -> None:
         """
@@ -699,14 +886,16 @@ Query `/healthz` endpoint to confirm 200 OK status.
 
         # 3. Verify final answer
         self.assertIn("[1]", result["answer"])
-        self.assertEqual(result["turns"], 2)
 
     def test_09_multihop_reasoning_flow(self) -> None:
         """
-        Tests multi-turn, multi-hop reasoning flow:
-        Turn 1: Semantic search to discover relevant documentation.
-        Turn 2: Graph traversal to retrieve all child sections under the parent wiki.
-        Turn 3: Grounded final answer synthesizing the multi-hop evidence.
+        Tests multi-turn, multi-hop reasoning flow via Self-RAG reflection:
+        Turn 1: Semantic search to discover runbook.
+        Evaluator: Identifies missing child steps, recommends `graph_traversal`.
+        Reformulator: Synthesizes new query for child pages.
+        Turn 2: Graph traversal retrieves full child runbook documents.
+        Evaluator: Verifies evidence sufficiency (GENERATE).
+        Generator: Synthesizes final grounded answer.
         """
         mock_llm = MockMultiHopLLMForLangGraph()
         planner = LangGraphAgentPlanner(
@@ -730,10 +919,10 @@ Query `/healthz` endpoint to confirm 200 OK status.
         retrieved_titles = [c.get("title") for c in result["retrieved_chunks"]]
         self.assertTrue(any("Disaster Recovery Runbook" in t for t in retrieved_titles))
 
-        # 3. Verify final answer and turn count
+        # 3. Verify final answer and turns
         self.assertIn("Disaster Recovery Runbook", result["answer"])
         self.assertIn("Drain ingress traffic", result["answer"])
-        self.assertEqual(result["turns"], 3)
+        self.assertEqual(result["retrieval_attempts"], 2)
 
     def test_10_github_entity_search_in_langgraph_loop(self) -> None:
         """
@@ -770,7 +959,73 @@ Query `/healthz` endpoint to confirm 200 OK status.
         self.assertIn("alice", result["answer"])
         self.assertIn("bob", result["answer"])
         self.assertIn("[1]", result["answer"])
-        self.assertEqual(result["turns"], 2)
+
+    def test_11_self_rag_reflection_and_reformulation_loop(self) -> None:
+        """
+        Explicitly validates the Self-RAG reflection state transitions:
+        Turn 1: Semantic search retrieves PR title (insufficient).
+        Evaluator: Emits REFORMULATE with missing reviewer info and recommends github_entity_search.
+        Reformulator: Generates targeted query 'get PR #142 details'.
+        Turn 2: Reasoner uses reflection guidance to execute github_entity_search.
+        Evaluator: Emits GENERATE with sufficient evidence.
+        Generator: Synthesizes verified answer.
+        """
+        mock_llm = MockSelfRAGReflectionLLM()
+        planner = LangGraphAgentPlanner(
+            llm_provider=mock_llm,
+            tool_registry=self.tool_registry,
+            max_turns=4,
+            max_retrieval_attempts=3,
+        )
+
+        result = planner.run(
+            query="Who approved the checkout timeout fix?",
+            user_context={"roles": ["engineer"], "user_id": "eng@company.com"},
+        )
+
+        # 1. Verify 2 retrieval attempts occurred
+        self.assertEqual(result["retrieval_attempts"], 2)
+
+        # 2. Verify query was reformulated
+        self.assertEqual(len(result["reformulated_queries"]), 1)
+        self.assertEqual(result["reformulated_queries"][0], "get PR #142 details")
+
+        # 3. Verify tool sequence: semantic_search -> github_entity_search
+        self.assertEqual(len(result["tool_calls"]), 2)
+        self.assertEqual(result["tool_calls"][0]["tool"], "semantic_search")
+        self.assertEqual(result["tool_calls"][1]["tool"], "github_entity_search")
+
+        # 4. Verify final evaluation state
+        self.assertIsNotNone(result["evaluation"])
+        self.assertTrue(result["evaluation"]["evidence_sufficient"])
+        self.assertEqual(result["evaluation"]["recommended_action"], "GENERATE")
+
+        # 5. Verify final answer
+        self.assertIn("alice", result["answer"])
+        self.assertIn("bob", result["answer"])
+        self.assertIn("[1]", result["answer"])
+
+    def test_12_max_retrieval_attempts_fallback(self) -> None:
+        """
+        Verifies that if retrieval remains insufficient, the state machine
+        gracefully halts after `max_retrieval_attempts` without infinite loops.
+        """
+        mock_llm = MockMaxAttemptsLLM()
+        planner = LangGraphAgentPlanner(
+            llm_provider=mock_llm,
+            tool_registry=self.tool_registry,
+            max_turns=5,
+            max_retrieval_attempts=2,
+        )
+
+        result = planner.run(
+            query="Show me the production architecture diagram for payments.",
+            user_context={"roles": ["engineer"], "user_id": "eng@company.com"},
+        )
+
+        # Should halt at max_retrieval_attempts = 2
+        self.assertEqual(result["retrieval_attempts"], 2)
+        self.assertIn("Best effort answer based on available evidence", result["answer"])
 
 
 if __name__ == "__main__":

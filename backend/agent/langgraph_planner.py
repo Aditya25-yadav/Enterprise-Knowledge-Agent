@@ -45,8 +45,10 @@ from langchain_core.messages import (
 )
 from langgraph.graph import END, START, StateGraph
 
+from backend.agent.reformulator import QueryReformulator
 from backend.agent.state import AgentState
 from backend.agent.tools import ToolRegistry, create_default_tool_registry
+from backend.evaluation.evaluator import EvidenceEvaluator
 from backend.generation.answer_generator import AnswerGenerator
 from backend.generation.context_builder import ContextBuilder
 from backend.llm.base import (
@@ -57,6 +59,7 @@ from backend.llm.base import (
     ToolCall,
 )
 from backend.llm.factory import get_llm_provider
+from backend.models.evaluation import EvaluationResult, RecommendedAction
 
 
 def _to_internal_messages(langchain_msgs: List[BaseMessage]) -> List[Message]:
@@ -97,7 +100,7 @@ def _to_internal_messages(langchain_msgs: List[BaseMessage]) -> List[Message]:
 
 class LangGraphAgentPlanner:
     """
-    Stateful Enterprise Agent Planner orchestrated by LangGraph.
+    Stateful Enterprise Agent Planner orchestrated by LangGraph with Self-RAG Reflection (Phase 7).
     """
 
     SYSTEM_INSTRUCTION = """You are an Enterprise Knowledge Agent.
@@ -119,35 +122,42 @@ Guidelines for Tool Selection:
    - 'get_issue_details': Find issue reporter, assignees, labels, and closing PRs.
    - 'get_labeled_items': Find PRs and issues tagged with a specific label.
    - 'get_team_overview': Find team members and accessible repositories.
+   - 'get_repo_overview': Find repository maintainers, open issues, and file counts.
    - 'get_neighbors' / 'find_path': Generalized multi-hop entity traversal and relationship path finding.
 6. Multi-Tool & Multi-Hop Planning:
    - Single-Turn Parallel: If a query combines concepts, identifiers, or developer questions, you may invoke multiple tools in the same turn.
    - Multi-Turn Multi-Hop: If initial search results identify a key PR, commit, or document, make follow-up calls in subsequent turns with `github_entity_search`, `resource_lookup`, or `graph_traversal`.
-7. If initial search results are empty or lack specific details, refine your query or traverse adjacent graph nodes.
+7. Reflection & Quality Control:
+   - If the EvidenceEvaluator identifies missing information or suggests a specific tool, adapt your query and call the recommended tool to bridge the knowledge gap.
 8. Once sufficient evidence is gathered, formulate a clear, professional, and well-structured answer.
 9. Always cite specific evidence when stating facts or steps using bracketed references (e.g. [1], [2]).
 """
-
 
     def __init__(
         self,
         llm_provider: Optional[LLMProvider] = None,
         tool_registry: Optional[ToolRegistry] = None,
         answer_generator: Optional[AnswerGenerator] = None,
+        evidence_evaluator: Optional[EvidenceEvaluator] = None,
+        query_reformulator: Optional[QueryReformulator] = None,
         max_turns: int = 5,
+        max_retrieval_attempts: int = 3,
     ) -> None:
         self.llm_provider = llm_provider or get_llm_provider()
         self.tool_registry = tool_registry or create_default_tool_registry()
         self.answer_generator = answer_generator or AnswerGenerator(llm_provider=self.llm_provider)
+        self.evidence_evaluator = evidence_evaluator or EvidenceEvaluator(llm_provider=self.llm_provider)
+        self.query_reformulator = query_reformulator or QueryReformulator(llm_provider=self.llm_provider)
         self.max_turns = max_turns
+        self.max_retrieval_attempts = max_retrieval_attempts
         self.graph = self._build_graph()
 
     # ── Graph Node Implementations ───────────────────────────────────────────
 
     def _reasoner_node(self, state: AgentState) -> Dict[str, Any]:
         """
-        LLM Reasoner Step: Analyzes conversation state and available tools,
-        deciding whether to issue ToolCalls or synthesize a direct answer.
+        LLM Reasoner Step: Analyzes conversation state, reflection feedback, and available tools,
+        deciding whether to issue ToolCalls or formulate a final direct answer.
         """
         turn_count = state.get("turn_count", 0) + 1
         tools = self.tool_registry.get_definitions()
@@ -243,6 +253,65 @@ Guidelines for Tool Selection:
             "retrieved_chunks": accumulated_chunks,
         }
 
+    def _evaluator_node(self, state: AgentState) -> Dict[str, Any]:
+        """
+        Evidence Evaluator Node (Phase 7):
+        Inspects all accumulated evidence for relevance, completeness, and knowledge gaps.
+        """
+        attempts = state.get("retrieval_attempts", 0) + 1
+        query = state.get("current_query") or state.get("query")
+        chunks = state.get("retrieved_chunks", [])
+        history = _to_internal_messages(state.get("messages", []))
+
+        eval_result = self.evidence_evaluator.evaluate_evidence(
+            query=query,
+            chunks=chunks,
+            conversation_history=history,
+        )
+
+        return {
+            "evaluation": eval_result.to_dict(),
+            "missing_information": eval_result.missing_information,
+            "retrieval_attempts": attempts,
+        }
+
+    def _reformulator_node(self, state: AgentState) -> Dict[str, Any]:
+        """
+        Query Reformulator Node (Phase 7):
+        Transforms the active query using evaluator gap feedback and injects
+        reflection guidance into the conversation history for the next reasoner turn.
+        """
+        eval_dict = state.get("evaluation") or {}
+        eval_result = EvaluationResult.from_dict(eval_dict)
+        original_query = state.get("query")
+        chunks = state.get("retrieved_chunks", [])
+        history = _to_internal_messages(state.get("messages", []))
+
+        reformulation = self.query_reformulator.reformulate(
+            original_query=original_query,
+            current_evidence=chunks,
+            evaluation=eval_result,
+            conversation_history=history,
+        )
+
+        new_query = reformulation.get("reformulated_query", original_query)
+        suggested_tool = reformulation.get("suggested_tool") or eval_result.recommended_tool
+
+        # Construct reflection guidance message for Reasoner
+        guidance_text = f"[Self-RAG Reflection]: The previous retrieval had knowledge gaps: {', '.join(eval_result.missing_information)}."
+        if suggested_tool:
+            guidance_text += f" Recommended tool: `{suggested_tool}`."
+        guidance_text += f" Next targeted query: '{new_query}'."
+
+        ref_queries = list(state.get("reformulated_queries", []))
+        ref_queries.append(new_query)
+
+        return {
+            "current_query": new_query,
+            "reformulated_queries": ref_queries,
+            "messages": [HumanMessage(content=guidance_text)],
+        }
+
     def _generator_node(self, state: AgentState) -> Dict[str, Any]:
         """
         Grounded Answer Generator Node: Synthesizes final response using
@@ -267,11 +336,11 @@ Guidelines for Tool Selection:
 
     # ── Conditional Routing ──────────────────────────────────────────────────
 
-    def _should_continue(self, state: AgentState) -> Literal["tool_node", "generator_node"]:
+    def _reasoner_routing(self, state: AgentState) -> Literal["tool_node", "generator"]:
         """
-        Determines the next edge:
+        Determines routing from reasoner:
           - If reasoner returned tool_calls and max_turns not reached -> 'tool_node'
-          - Otherwise -> 'generator_node'
+          - Otherwise -> 'generator'
         """
         last_message = state["messages"][-1]
         has_tools = bool(getattr(last_message, "tool_calls", None))
@@ -279,29 +348,61 @@ Guidelines for Tool Selection:
 
         if has_tools and turn_count < self.max_turns:
             return "tool_node"
-        return "generator_node"
+        return "generator"
+
+    def _evaluator_routing(self, state: AgentState) -> Literal["generator", "reformulator"]:
+        """
+        Determines routing from evaluator (Self-RAG Reflection Loop):
+          - If evidence is SUFFICIENT or max retrieval attempts / turns reached -> 'generator'
+          - If evidence is INSUFFICIENT or REFORMULATE -> 'reformulator'
+        """
+        eval_dict = state.get("evaluation") or {}
+        action = eval_dict.get("recommended_action", "GENERATE")
+        is_sufficient = bool(eval_dict.get("evidence_sufficient", True))
+        attempts = state.get("retrieval_attempts", 0)
+        turns = state.get("turn_count", 0)
+
+        # Stop reflection loop if max attempts or turns reached
+        if attempts >= self.max_retrieval_attempts or turns >= self.max_turns:
+            return "generator"
+
+        if is_sufficient or action == RecommendedAction.GENERATE.value:
+            return "generator"
+
+        return "reformulator"
 
     # ── Graph Assembly ───────────────────────────────────────────────────────
 
     def _build_graph(self) -> Any:
         workflow = StateGraph(AgentState)
 
-        # Add nodes
+        # Add 5 specialized nodes
         workflow.add_node("reasoner", self._reasoner_node)
         workflow.add_node("tool_node", self._tool_node)
+        workflow.add_node("evaluator", self._evaluator_node)
+        workflow.add_node("reformulator", self._reformulator_node)
         workflow.add_node("generator", self._generator_node)
 
         # Connect edges
         workflow.add_edge(START, "reasoner")
         workflow.add_conditional_edges(
             "reasoner",
-            self._should_continue,
+            self._reasoner_routing,
             {
                 "tool_node": "tool_node",
-                "generator_node": "generator",
+                "generator": "generator",
             },
         )
-        workflow.add_edge("tool_node", "reasoner")
+        workflow.add_edge("tool_node", "evaluator")
+        workflow.add_conditional_edges(
+            "evaluator",
+            self._evaluator_routing,
+            {
+                "generator": "generator",
+                "reformulator": "reformulator",
+            },
+        )
+        workflow.add_edge("reformulator", "reasoner")
         workflow.add_edge("generator", END)
 
         return workflow.compile()
@@ -315,7 +416,7 @@ Guidelines for Tool Selection:
         conversation_history: Optional[List[BaseMessage]] = None,
     ) -> Dict[str, Any]:
         """
-        Executes the compiled LangGraph workflow for a user query.
+        Executes the compiled LangGraph workflow with Self-RAG reflection for a user query.
         """
         user_context = user_context or {
             "roles": ["employee"],
@@ -330,11 +431,16 @@ Guidelines for Tool Selection:
 
         initial_state: AgentState = {
             "query": query,
+            "current_query": query,
             "user_context": user_context,
             "messages": initial_messages,
             "retrieved_chunks": [],
             "citations": [],
             "answer": "",
+            "evaluation": None,
+            "missing_information": [],
+            "retrieval_attempts": 0,
+            "reformulated_queries": [],
             "turn_count": 0,
             "error": None,
         }
@@ -357,6 +463,10 @@ Guidelines for Tool Selection:
             "tool_calls": executed_tool_calls,
             "citations": final_state.get("citations", []),
             "retrieved_chunks": final_state.get("retrieved_chunks", []),
+            "evaluation": final_state.get("evaluation"),
+            "missing_information": final_state.get("missing_information", []),
+            "retrieval_attempts": final_state.get("retrieval_attempts", 0),
+            "reformulated_queries": final_state.get("reformulated_queries", []),
             "turns": final_state.get("turn_count", 1),
             "llm_provider": getattr(self.llm_provider, "__class__", type(self.llm_provider)).__name__,
         }

@@ -1344,23 +1344,186 @@ This document maintains a chronological record of all architectural decisions, c
 - [`docs/verify_entity_graph.md`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/docs/verify_entity_graph.md)
 - [`claude.md`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/claude.md)
 
+---
 
+## Step 69: Implemented EvidenceEvaluator & Self-RAG Reflection Engine (Phase 7 - Part 1)
+- **Date:** 2026-09-22
+- **Time:** 14:18 IST
+- **Purpose:** Implemented the core `EvidenceEvaluator` engine and structured evaluation models (`EvaluationResult`, `ChunkRelevance`, `RecommendedAction`) to provide quality-control inspection and reflection between retrieval and answer generation.
 
+### Key Implementation Details:
+1. **Evaluation Data Models (`backend/models/evaluation.py`)**:
+   - `ChunkRelevance`: Per-chunk relevance scoring (0.0 to 1.0), binary flag `is_relevant`, and specific rationale.
+   - `RecommendedAction`: Enum with `GENERATE` (sufficient evidence), `RETRIEVE_MORE` (relevant but incomplete), and `REFORMULATE` (irrelevant / off-track).
+   - `EvaluationResult`: Holds aggregate relevance score, boolean `evidence_sufficient`, `missing_information` list, `unsupported_claims`, `recommended_tool` suggestion, and detailed reasoning.
+2. **`EvidenceEvaluator` Engine (`backend/evaluation/evaluator.py`)**:
+   - Analyzes retrieved chunks using `ContextBuilder.build_context()`.
+   - Prompts the LLM with structured criteria for relevance, sufficiency, and knowledge gap detection.
+   - Robust JSON parser supporting markdown code blocks with graceful heuristic fallback on malformed outputs.
+   - Immediate zero-call shortcut for empty chunk sets.
+3. **Unit Tests (`backend/evaluation/tests/test_evaluator.py`)**:
+   - 6/6 tests passing covering sufficient evidence, knowledge gap detection, irrelevant query reformulation, markdown JSON parsing, and heuristic fallback.
 
+### Files Created:
+- [`backend/models/evaluation.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/models/evaluation.py)
+- [`backend/evaluation/__init__.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/evaluation/__init__.py)
+- [`backend/evaluation/evaluator.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/evaluation/evaluator.py)
+- [`backend/evaluation/tests/test_evaluator.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/evaluation/tests/test_evaluator.py)
 
+---
 
+## Step 70: Wired Native Parameterized Cypher Queries for Full Neo4j Execution Mode
+- **Date:** 2026-09-22
+- **Time:** 14:46 IST
+- **Purpose:** Implemented native parameterized Cypher methods across all 12 graph operations in `EntityGraphRetriever` for production Neo4j mode, ensuring queries run natively on the database engine with zero LLM Cypher hallucinations and immunity to Cypher injection.
 
+### Key Implementation Highlights:
+1. **Parameterized Cypher Operations (`backend/retrieval/entity_graph.py`)**:
+   - `_neo4j_get_entity`: Direct node lookup by ID, suffix, PR number, username, or file path.
+   - `_neo4j_get_neighbors`: Variable-depth directional Cypher relationship matching with label and edge type filters.
+   - `_neo4j_search_nodes`: Text and property filtering via Cypher `coalesce` and case-insensitive matching.
+   - `_neo4j_find_path`: Native `shortestPath()` Cypher graph algorithm.
+   - `_neo4j_get_pr_details`: Aggregated OPTIONAL MATCH collecting author, reviewers, modified files, and closed issues.
+   - `_neo4j_get_user_activity`: Developer 360 Cypher aggregation for PRs, commits, reviews, and issues.
+   - `_neo4j_get_file_contributors`: Multi-hop code ownership and commit history.
+   - `_neo4j_get_commit_details`: Commit author, touched files, and parent PR merge links.
+   - `_neo4j_get_issue_details`: Issue state, reporter, assignees, labels, and closing PRs.
+   - `_neo4j_get_labeled_items`: Label/topic aggregation for issues and PRs.
+   - `_neo4j_get_team_overview`: Team membership and accessible repositories.
+   - `_neo4j_get_repo_overview`: File counts, teams with access, maintainers, open issues, and stargazers.
+2. **Testing**:
+   - Updated [`backend/retrieval/tests/test_entity_graph.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/retrieval/tests/test_entity_graph.py) with `test_13_native_neo4j_mode_cypher_dispatch` using a mock Neo4j client verifying Cypher dispatch and parameter binding (13/13 passed).
 
+### Files Modified:
+- [`backend/retrieval/entity_graph.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/retrieval/entity_graph.py)
+- [`backend/retrieval/tests/test_entity_graph.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/retrieval/tests/test_entity_graph.py)
+- [`claude.md`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/claude.md)
 
+---
 
+## Step 71: Implemented QueryReformulator Node (Phase 7 - Part 2)
+- **Date:** 2026-09-22
+- **Time:** 14:52 IST
+- **Purpose:** Implemented `QueryReformulator` in `backend/agent/reformulator.py` to transform the user query into high-precision sub-queries when the `EvidenceEvaluator` detects knowledge gaps (`missing_information`) or recommends query reformulation.
 
+### Key Features:
+1. **Targeted Sub-Query Synthesis**: Transforms original query using accumulated evidence, missing gap list, and suggested tool recommendation.
+2. **Robust Parsing**: Supports markdown JSON code blocks, extracting `reformulated_query`, `reasoning`, and `suggested_tool`.
+3. **Graceful Fallback**: Automatically creates search queries by joining missing information gaps when LLM output is malformed.
+4. **Unit Tests**: `backend/agent/tests/test_reformulator.py` (3/3 passed).
 
+### Files Created / Modified:
+- [`backend/agent/reformulator.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/agent/reformulator.py)
+- [`backend/agent/__init__.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/agent/__init__.py)
+- [`backend/agent/tests/test_reformulator.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/agent/tests/test_reformulator.py)
+- [`claude.md`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/claude.md)
 
+---
 
+## Step 72: Integrated LangGraph Self-RAG Reflection State Machine & Completed Phase 7 Verification
+- **Date:** 2026-09-22
+- **Time:** 15:18 IST
+- **Purpose:** Completed full integration of the 5-node LangGraph state machine (`reasoner`, `tool_node`, `evaluator`, `reformulator`, `generator`), updated unit tests, created end-to-end verification script `scripts/verify_phase7.py`, and authored `docs/verify_phase7.md`.
 
+### Key Implementation & Verification Highlights:
+1. **5-Node LangGraph State Machine Architecture (`backend/agent/langgraph_planner.py`)**:
+   - `START` $\to$ `reasoner` $\to$ `tool_node` $\to$ `evaluator` $\to$ `generator` / `reformulator` $\to$ `reasoner` $\to$ `generator` $\to$ `END`.
+   - `evaluator` node executes `EvidenceEvaluator.evaluate_evidence()` with full conversation history and accumulated evidence chunks.
+   - `_evaluator_routing` conditionally branches to `generator` if evidence is sufficient (`GENERATE`) or max retrieval attempts are reached, and branches to `reformulator` if evidence is insufficient (`RETRIEVE_MORE` or `REFORMULATE`).
+   - `reformulator` node executes `QueryReformulator.reformulate()`, updates `current_query`, records `reformulated_queries`, and injects a `[Self-RAG Reflection]` message into state messages for the next `reasoner` turn.
+2. **Self-RAG State Schema (`backend/agent/state.py`)**:
+   - Integrated `current_query`, `evaluation`, `missing_information`, `retrieval_attempts`, and `reformulated_queries` into `AgentState`.
+3. **Comprehensive Test Suite Updates (`backend/agent/tests/test_langgraph_agent.py`)**:
+   - 12/12 unit tests passing, verifying compilation, single-turn sufficient retrieval, multi-tool single-turn execution, resource lookup, graph traversal, multi-hop reasoning, developer entity search, Self-RAG reflection state transitions, and `max_retrieval_attempts` guardrail cutoff.
+4. **End-to-End Verification (`scripts/verify_phase7.py` & `docs/verify_phase7.md`)**:
+   - Demonstrated complete 2-cycle reflection loop where Turn 1 semantic search identifies Jira bug PAY-928, evaluator detects missing PR approval and modified file gaps, reformulator synthesizes targeted query, Turn 2 queries GitHub entity graph, evaluator marks 100% sufficient, and generator produces grounded answer with citations [1], [2].
+   - Verification script exited with code 0 (100% passed).
 
+### Files Created / Modified:
+- [`backend/agent/state.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/agent/state.py)
+- [`backend/agent/langgraph_planner.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/agent/langgraph_planner.py)
+- [`backend/agent/tests/test_langgraph_agent.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/agent/tests/test_langgraph_agent.py)
+- [`scripts/verify_phase7.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/scripts/verify_phase7.py)
+- [`docs/verify_phase7.md`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/docs/verify_phase7.md)
+- [`claude.md`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/claude.md)
 
+---
 
+## Step 73: Implemented Database-Level RBAC Resolver & Security Hierarchy (Phase 8)
+- **Date:** 2026-09-22
+- **Time:** 17:35 IST
+- **Purpose:** Implemented centralized `RBACResolver`, hierarchical `RoleHierarchy` and `GroupHierarchy` expansion DAGs, and database-native pre-filter translators (`QdrantFilterTranslator`, `BM25FilterTranslator`, `CypherRBACClauseBuilder`, `GraphNodeFilter`) across all 5 enterprise retrieval modalities.
 
+### Key Implementation & Verification Highlights:
+1. **Security Data Models (`backend/models/security.py`)**:
+   - `UserSecurityContext`: Encapsulates caller identity (`user_id`), assigned roles, groups, tenant, attributes, superadmin flag, and resolved `effective_roles` / `effective_groups`.
+   - `ResourcePermissions`: Normalized descriptor for resource access rules (`is_public`, `allowed_roles`, `allowed_users`, `allowed_groups`, `parent_id`).
+   - `AccessDecision`: Structured authorization evaluation result with `DecisionReason` (`PUBLIC`, `USER_WHITELIST`, `ROLE_MATCH`, `GROUP_MATCH`, `INHERITED_ALLOW`, `SUPERADMIN_BYPASS`, `DENIED`).
+2. **Hierarchical Expansion Engines (`backend/security/hierarchy.py`)**:
+   - `RoleHierarchy`: Transitive role DAG (e.g. `secops` $\to$ `security-admin` $\to$ `engineer` $\to$ `employee` $\to$ `guest`).
+   - `GroupHierarchy`: Nested organizational team/group expansion (e.g. `payments-core` $\to$ `payments-team` $\to$ `engineering` $\to$ `all-company`).
+3. **Centralized `RBACResolver` (`backend/security/rbac_resolver.py`)**:
+   - `evaluate_access()`, `resolve_context()`, `filter_candidates()`, and parent resource permission inheritance.
+4. **Database-Native Pre-Filter Translators (`backend/security/translators.py`)**:
+   - `QdrantFilterTranslator`: Builds native `rest.Filter` with `should` boolean clauses for zero top-$k$ vector leakage.
+   - `BM25FilterTranslator`: High-speed boolean candidate predicate.
+   - `CypherRBACClauseBuilder`: Parameterized Cypher `WHERE` clause generator for Neo4j.
+   - `GraphNodeFilter`: In-memory predicate evaluator for property graph nodes.
+5. **Retriever Integration (`backend/storage/`, `backend/retrieval/`)**:
+   - Integrated centralized RBAC resolution into `QdrantVectorStore`, `BM25Index`, `SemanticRetriever`, `KeywordRetriever`, `ResourceLookupRetriever`, `GraphRetriever`, and `create_langchain_tools`.
+6. **Testing & Verification**:
+   - `backend/security/tests/test_rbac_resolver.py`: 10/10 passed.
+   - `backend/security/tests/test_translators.py`: 6/6 passed.
+   - `backend/security/tests/test_retrieval_rbac.py`: 4/4 passed.
+   - `backend/agent/tests/test_langgraph_agent.py`: 12/12 passed.
+   - Total Security Test Suite: 32/32 passed.
+   - Verification script: [`scripts/verify_phase8.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/scripts/verify_phase8.py) executed with exit code 0.
+   - Technical report: [`docs/verify_phase8.md`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/docs/verify_phase8.md).
 
+### Files Created / Modified:
+- [`backend/models/security.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/models/security.py)
+- [`backend/security/hierarchy.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/security/hierarchy.py)
+- [`backend/security/rbac_resolver.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/security/rbac_resolver.py)
+- [`backend/security/translators.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/security/translators.py)
+- [`backend/security/__init__.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/security/__init__.py)
+- [`backend/security/tests/test_rbac_resolver.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/security/tests/test_rbac_resolver.py)
+- [`backend/security/tests/test_translators.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/security/tests/test_translators.py)
+- [`backend/security/tests/test_retrieval_rbac.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/security/tests/test_retrieval_rbac.py)
+- [`backend/storage/qdrant_client.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/storage/qdrant_client.py)
+- [`backend/storage/bm25_index.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/storage/bm25_index.py)
+- [`backend/retrieval/semantic.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/retrieval/semantic.py)
+- [`backend/retrieval/keyword.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/retrieval/keyword.py)
+- [`backend/retrieval/resource_lookup.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/retrieval/resource_lookup.py)
+- [`backend/retrieval/graph.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/retrieval/graph.py)
+- [`scripts/verify_phase8.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/scripts/verify_phase8.py)
+- [`docs/verify_phase8.md`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/docs/verify_phase8.md)
+- [`claude.md`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/claude.md)
+
+---
+
+## Step 74: Created Master Phase Reference Documentation (`docs/phases.md`)
+- **Date:** 2026-09-22
+- **Time:** 17:44 IST
+- **Purpose:** Created a comprehensive master reference guide in [`docs/phases.md`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/docs/phases.md) documenting the complete implementation, architecture, key decisions, and verification matrix for all phases (Phase 0 through Phase 10).
+
+### Key Contents Documented:
+1. **Master Architecture & Pipeline Diagram**: Full end-to-end flowchart from multi-modal connectors to OKF chunking, dual vector/sparse/graph storage, database-level RBAC pre-filtering, and the 6-node LangGraph state machine.
+2. **Phase-by-Phase Deep Dives**:
+   - **Foundation Layer**: Multi-modal connectors (GitHub, Notion, Dropbox, Gmail, Jira), recursive MIME/ADF/binary parsers, and OKF v0.2 Knowledge Bundles.
+   - **Phase 0**: LLMProvider abstraction & swappable multi-provider architecture.
+   - **Phase 1**: Structure-preserving intelligent chunking (`SmartChunk`, `OKFChunker`).
+   - **Phase 2**: Local in-process embeddings (`LocalEmbedder`) & local Qdrant vector store (`QdrantVectorStore`).
+   - **Phase 3**: Sparse BM25 keyword search & inverted index (`BM25Index`).
+   - **Phase 4**: Core autonomous agent loop & semantic retrieval (`LangGraphAgentPlanner`, `ContextBuilder`, `AnswerGenerator`).
+   - **Phase 5**: Technical identifier keyword retrieval tool (`KeywordRetriever`).
+   - **Phase 6**: Property graph intelligence & multi-hop traversal (In-Memory + Neo4j Cypher, `EntityGraphRetriever`).
+   - **Phase 7**: Evidence evaluator & Self-RAG reflection node (`EvidenceEvaluator`, `QueryReformulator`, LangGraph reflection loop).
+   - **Phase 8**: Database-level RBAC resolver & security hierarchy (`RBACResolver`, `RoleHierarchy`, `GroupHierarchy`, pre-filter translators).
+   - **Phase 9**: Local cross-encoder reranker (`CrossEncoderReranker`, ms-marco/bge, score calibration).
+   - **Phase 10**: Hybrid search fusion node (Reciprocal Rank Fusion in LangGraph).
+3. **Verification Matrix & CLI Execution Commands**: Complete guide to running unit tests and phase verification scripts.
+
+### Files Created / Modified:
+- [`docs/phases.md`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/docs/phases.md)
+- [`claude.md`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/claude.md)
 

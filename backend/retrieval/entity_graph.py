@@ -576,62 +576,416 @@ class EntityGraphRetriever:
     ) -> Any:
         """
         Universal dispatch entrypoint for Agent Planner and LangChain tools.
-        Supports both generalized graph operations and domain shortcuts.
+        Dispatches to high-performance native Neo4j Cypher when connected,
+        or InMemoryEntityGraph when offline / in-memory.
         """
         op = operation.strip().lower()
         params = parameters or {}
+        use_neo4j = (self.mode == "neo4j" and self.neo4j_client is not None)
 
         # ── 1. Generalized Operations ──
         if op == "get_entity":
-            return self.memory_graph.get_entity(target)
+            return self._neo4j_get_entity(target) if use_neo4j else self.memory_graph.get_entity(target)
         elif op == "get_neighbors":
-            return self.memory_graph.get_neighbors(
-                node_id=target,
-                direction=params.get("direction", "both"),
-                rel_types=params.get("rel_types"),
-                target_label=params.get("target_label"),
-                max_depth=params.get("max_depth", 1),
+            return (
+                self._neo4j_get_neighbors(
+                    node_id=target,
+                    direction=params.get("direction", "both"),
+                    rel_types=params.get("rel_types"),
+                    target_label=params.get("target_label"),
+                    max_depth=params.get("max_depth", 1),
+                )
+                if use_neo4j
+                else self.memory_graph.get_neighbors(
+                    node_id=target,
+                    direction=params.get("direction", "both"),
+                    rel_types=params.get("rel_types"),
+                    target_label=params.get("target_label"),
+                    max_depth=params.get("max_depth", 1),
+                )
             )
         elif op == "search_nodes":
-            return self.memory_graph.search_nodes(
-                label=params.get("label"),
-                property_filters=params.get("property_filters"),
-                text_query=target,
-                limit=params.get("limit", 20),
+            return (
+                self._neo4j_search_nodes(
+                    label=params.get("label"),
+                    property_filters=params.get("property_filters"),
+                    text_query=target,
+                    limit=params.get("limit", 20),
+                )
+                if use_neo4j
+                else self.memory_graph.search_nodes(
+                    label=params.get("label"),
+                    property_filters=params.get("property_filters"),
+                    text_query=target,
+                    limit=params.get("limit", 20),
+                )
             )
         elif op == "find_path":
             end_id = params.get("end_id") or target
             start_id = params.get("start_id", target)
-            return self.memory_graph.find_path(start_id=start_id, end_id=end_id)
+            max_depth = params.get("max_depth", 3)
+            return (
+                self._neo4j_find_path(start_id=start_id, end_id=end_id, max_depth=max_depth)
+                if use_neo4j
+                else self.memory_graph.find_path(start_id=start_id, end_id=end_id, max_depth=max_depth)
+            )
 
         # ── 2. Domain-Specific Shortcuts ──
         elif op == "get_pr_details":
-            return self.memory_graph.get_pr_details(pr_identifier=target)
+            return self._neo4j_get_pr_details(pr_identifier=target) if use_neo4j else self.memory_graph.get_pr_details(pr_identifier=target)
         elif op == "get_user_activity":
-            return self.memory_graph.get_user_activity(username=target)
+            return self._neo4j_get_user_activity(username=target) if use_neo4j else self.memory_graph.get_user_activity(username=target)
         elif op == "get_file_contributors":
-            return self.memory_graph.get_file_contributors(file_path=target)
+            return self._neo4j_get_file_contributors(file_path=target) if use_neo4j else self.memory_graph.get_file_contributors(file_path=target)
         elif op == "get_commit_details":
-            return self.memory_graph.get_commit_details(commit_sha_or_id=target)
+            return self._neo4j_get_commit_details(commit_sha_or_id=target) if use_neo4j else self.memory_graph.get_commit_details(commit_sha_or_id=target)
         elif op == "get_issue_details":
-            return self.memory_graph.get_issue_details(issue_identifier=target)
+            return self._neo4j_get_issue_details(issue_identifier=target) if use_neo4j else self.memory_graph.get_issue_details(issue_identifier=target)
         elif op == "get_labeled_items":
-            return self.memory_graph.get_labeled_items(label_name=target)
+            return self._neo4j_get_labeled_items(label_name=target) if use_neo4j else self.memory_graph.get_labeled_items(label_name=target)
         elif op == "get_team_overview":
-            return self.memory_graph.get_team_overview(team_slug_or_id=target)
+            return self._neo4j_get_team_overview(team_slug_or_id=target) if use_neo4j else self.memory_graph.get_team_overview(team_slug_or_id=target)
         elif op == "get_repo_overview":
-            return self.memory_graph.get_repo_overview(repo_name=target)
+            return self._neo4j_get_repo_overview(repo_name=target) if use_neo4j else self.memory_graph.get_repo_overview(repo_name=target)
 
         # ── 3. Raw Cypher Execution (Neo4j mode) ──
         elif op == "raw_cypher":
             if self.mode == "neo4j" and self.neo4j_client:
                 upper = target.upper()
-                if any(kw in upper for kw in ["CREATE", "DELETE", "SET", "REMOVE", "MERGE", "DROP"]):
+                if any(kw in upper for kw in ["CREATE", "DELETE", "SET", "REMOVE", "MERGE", "DROP", "DETACH"]):
                     return {"error": "Write and destructive Cypher queries are prohibited via agent retrieval tool."}
                 return self.neo4j_client.run_query(target, params)
             return {"error": "raw_cypher requires active Neo4j connection. Use structured operations for in-memory mode."}
 
         return {"error": f"Unsupported entity graph operation '{operation}'"}
+
+    # ── Native Parameterized Cypher Implementations for Neo4j Mode ────────────
+
+    def _neo4j_get_entity(self, target: str) -> Optional[Dict[str, Any]]:
+        clean = target.strip().lstrip("#")
+        target_int = int(clean) if clean.isdigit() else None
+        cypher = """
+        MATCH (n)
+        WHERE n.node_id = $target
+           OR n.node_id ENDS WITH (':' + $clean)
+           OR ($target_int IS NOT NULL AND n.number = $target_int)
+           OR n.login = $clean
+           OR n.sha = $clean
+           OR n.path = $target
+        RETURN labels(n)[0] AS label, n.node_id AS node_id, properties(n) AS properties
+        LIMIT 1
+        """
+        rows = self.neo4j_client.run_query(cypher, {"target": target, "clean": clean, "target_int": target_int})
+        if not rows:
+            return None
+        r = rows[0]
+        props = r.get("properties") or {}
+        return {"label": r.get("label"), "node_id": r.get("node_id"), **props}
+
+    def _neo4j_get_neighbors(
+        self,
+        node_id: str,
+        direction: str = "both",
+        rel_types: Optional[List[str]] = None,
+        target_label: Optional[str] = None,
+        max_depth: int = 1,
+    ) -> List[Dict[str, Any]]:
+        clean = node_id.strip().lstrip("#")
+        rel_filter = ":" + "|".join(rel_types) if rel_types else ""
+        label_filter = f":{target_label}" if target_label else ""
+
+        if direction == "out":
+            pattern = f"-[r{rel_filter}*1..{max_depth}]->(m{label_filter})"
+        elif direction == "in":
+            pattern = f"<-[r{rel_filter}*1..{max_depth}]-(m{label_filter})"
+        else:
+            pattern = f"-[r{rel_filter}*1..{max_depth}]-(m{label_filter})"
+
+        cypher = f"""
+        MATCH (n)
+        WHERE n.node_id = $node_id OR n.node_id ENDS WITH (':' + $clean)
+        MATCH (n){pattern}
+        RETURN DISTINCT labels(m)[0] AS label, m.node_id AS node_id, properties(m) AS properties
+        LIMIT 50
+        """
+        rows = self.neo4j_client.run_query(cypher, {"node_id": node_id, "clean": clean})
+        results = []
+        for r in rows:
+            props = r.get("properties") or {}
+            results.append({"label": r.get("label"), "node_id": r.get("node_id"), **props})
+        return results
+
+    def _neo4j_search_nodes(
+        self,
+        label: Optional[str] = None,
+        property_filters: Optional[Dict[str, Any]] = None,
+        text_query: Optional[str] = None,
+        limit: int = 20,
+    ) -> List[Dict[str, Any]]:
+        label_str = f":{label}" if label else ""
+        cypher = f"""
+        MATCH (n{label_str})
+        WHERE ($text_query IS NULL
+           OR toLower(n.node_id) CONTAINS toLower($text_query)
+           OR toLower(coalesce(n.title, '')) CONTAINS toLower($text_query)
+           OR toLower(coalesce(n.name, '')) CONTAINS toLower($text_query)
+           OR toLower(coalesce(n.login, '')) CONTAINS toLower($text_query)
+           OR toLower(coalesce(n.path, '')) CONTAINS toLower($text_query))
+        RETURN labels(n)[0] AS label, n.node_id AS node_id, properties(n) AS properties
+        LIMIT $limit
+        """
+        rows = self.neo4j_client.run_query(cypher, {"text_query": text_query, "limit": limit})
+        results = []
+        for r in rows:
+            props = r.get("properties") or {}
+            if property_filters:
+                if not all(props.get(k) == v for k, v in property_filters.items()):
+                    continue
+            results.append({"label": r.get("label"), "node_id": r.get("node_id"), **props})
+        return results
+
+    def _neo4j_find_path(self, start_id: str, end_id: str, max_depth: int = 3) -> Optional[List[Dict[str, Any]]]:
+        clean_s = start_id.strip().lstrip("#")
+        clean_e = end_id.strip().lstrip("#")
+        cypher = f"""
+        MATCH (a), (b)
+        WHERE (a.node_id = $start_id OR a.node_id ENDS WITH (':' + $clean_s) OR a.login = $clean_s)
+          AND (b.node_id = $end_id OR b.node_id ENDS WITH (':' + $clean_e) OR b.path = $end_id)
+        MATCH p = shortestPath((a)-[*..{max_depth}]-(b))
+        RETURN [n IN nodes(p) | {{node_id: n.node_id, label: labels(n)[0]}}] AS nodes,
+               [r IN relationships(p) | type(r)] AS rels
+        LIMIT 1
+        """
+        rows = self.neo4j_client.run_query(cypher, {
+            "start_id": start_id, "clean_s": clean_s,
+            "end_id": end_id, "clean_e": clean_e,
+        })
+        if not rows:
+            return None
+        r = rows[0]
+        nodes = r.get("nodes", [])
+        rels = r.get("rels", [])
+        if not nodes:
+            return None
+        path = [{"node_id": nodes[0]["node_id"], "label": nodes[0]["label"]}]
+        for idx, (node, rel) in enumerate(zip(nodes[1:], rels)):
+            path.append({"rel": rel, "node_id": node["node_id"], "label": node["label"]})
+        return path
+
+    def _neo4j_get_pr_details(self, pr_identifier: str) -> Optional[Dict[str, Any]]:
+        clean = pr_identifier.strip().lstrip("#")
+        target_int = int(clean) if clean.isdigit() else None
+        cypher = """
+        MATCH (pr:PullRequest)
+        WHERE pr.node_id = $target OR pr.node_id ENDS WITH (':' + $clean) OR ($target_int IS NOT NULL AND pr.number = $target_int)
+        OPTIONAL MATCH (author:User)-[:CREATED]->(pr)
+        OPTIONAL MATCH (reviewer:User)-[:REVIEWED]->(pr)
+        OPTIONAL MATCH (assignee:User)-[:ASSIGNED_TO]->(pr)
+        OPTIONAL MATCH (pr)-[:MODIFIES]->(f:File)
+        OPTIONAL MATCH (pr)-[:CLOSES]->(i:Issue)
+        RETURN properties(pr) AS pr,
+               author.login AS author,
+               collect(DISTINCT reviewer.login) AS reviewers,
+               collect(DISTINCT assignee.login) AS assignees,
+               collect(DISTINCT f.path) AS modified_files,
+               collect(DISTINCT {number: i.number, title: i.title, state: i.state}) AS closed_issues
+        LIMIT 1
+        """
+        rows = self.neo4j_client.run_query(cypher, {"target": pr_identifier, "clean": clean, "target_int": target_int})
+        if not rows:
+            return None
+        r = rows[0]
+        res = dict(r.get("pr") or {})
+        res["author"] = r.get("author") or res.get("author_login")
+        res["reviewers"] = [x for x in r.get("reviewers", []) if x]
+        res["assignees"] = [x for x in r.get("assignees", []) if x]
+        res["modified_files"] = [x for x in r.get("modified_files", []) if x]
+        res["closed_issues"] = [x for x in r.get("closed_issues", []) if x and x.get("number")]
+        return res
+
+    def _neo4j_get_user_activity(self, username: str) -> Dict[str, Any]:
+        cypher = """
+        MATCH (u:User)
+        WHERE u.login = $username OR u.node_id ENDS WITH (':' + $username)
+        OPTIONAL MATCH (u)-[:CREATED]->(pr:PullRequest)
+        OPTIONAL MATCH (u)-[:AUTHORED]->(c:Commit)
+        OPTIONAL MATCH (u)-[:REVIEWED]->(rpr:PullRequest)
+        OPTIONAL MATCH (u)-[:ASSIGNED_TO]->(i:Issue)
+        RETURN properties(u) AS user,
+               collect(DISTINCT {number: pr.number, title: pr.title, state: pr.state}) AS authored_prs,
+               collect(DISTINCT {sha: c.sha, message: c.message}) AS authored_commits,
+               collect(DISTINCT {number: rpr.number, title: rpr.title}) AS reviewed_prs,
+               collect(DISTINCT {number: i.number, title: i.title, state: i.state}) AS assigned_issues
+        LIMIT 1
+        """
+        rows = self.neo4j_client.run_query(cypher, {"username": username})
+        if not rows:
+            return {"user": username, "authored_prs_count": 0, "authored_commits_count": 0}
+        r = rows[0]
+        u_props = r.get("user") or {}
+        a_prs = [x for x in r.get("authored_prs", []) if x and x.get("number")]
+        commits = [x for x in r.get("authored_commits", []) if x and x.get("sha")]
+        r_prs = [x for x in r.get("reviewed_prs", []) if x and x.get("number")]
+        issues = [x for x in r.get("assigned_issues", []) if x and x.get("number")]
+        return {
+            "user": u_props.get("login", username),
+            "name": u_props.get("name"),
+            "email": u_props.get("email"),
+            "authored_prs_count": len(a_prs),
+            "authored_prs": a_prs,
+            "authored_commits_count": len(commits),
+            "commits": commits,
+            "reviewed_prs_count": len(r_prs),
+            "reviewed_prs": r_prs,
+            "assigned_issues": issues,
+        }
+
+    def _neo4j_get_file_contributors(self, file_path: str) -> Dict[str, Any]:
+        cypher = """
+        MATCH (f:File)
+        WHERE f.path = $file_path OR f.node_id ENDS WITH $file_path
+        OPTIONAL MATCH (pr:PullRequest)-[:MODIFIES]->(f)
+        OPTIONAL MATCH (author:User)-[:CREATED]->(pr)
+        OPTIONAL MATCH (c:Commit)-[:MODIFIES]->(f)
+        OPTIONAL MATCH (c_author:User)-[:AUTHORED]->(c)
+        RETURN f.path AS file,
+               collect(DISTINCT coalesce(author.login, c_author.login)) AS authors,
+               collect(DISTINCT {sha: c.sha, message: c.message, author: c_author.login}) AS commits,
+               collect(DISTINCT {number: pr.number, title: pr.title, state: pr.state, author: author.login}) AS pull_requests
+        LIMIT 1
+        """
+        rows = self.neo4j_client.run_query(cypher, {"file_path": file_path})
+        if not rows:
+            return {"file": file_path, "authors": [], "commits": [], "pull_requests": []}
+        r = rows[0]
+        return {
+            "file": r.get("file") or file_path,
+            "authors": [x for x in r.get("authors", []) if x],
+            "commits": [x for x in r.get("commits", []) if x and x.get("sha")],
+            "pull_requests": [x for x in r.get("pull_requests", []) if x and x.get("number")],
+        }
+
+    def _neo4j_get_commit_details(self, commit_sha_or_id: str) -> Optional[Dict[str, Any]]:
+        clean = commit_sha_or_id.strip()
+        cypher = """
+        MATCH (c:Commit)
+        WHERE c.sha STARTS WITH $clean OR c.node_id ENDS WITH $clean
+        OPTIONAL MATCH (author:User)-[:AUTHORED]->(c)
+        OPTIONAL MATCH (c)-[:MODIFIES]->(f:File)
+        RETURN properties(c) AS commit,
+               author.login AS author,
+               collect(DISTINCT f.path) AS modified_files
+        LIMIT 1
+        """
+        rows = self.neo4j_client.run_query(cypher, {"clean": clean})
+        if not rows:
+            return None
+        r = rows[0]
+        res = dict(r.get("commit") or {})
+        res["author"] = r.get("author") or res.get("author_login")
+        res["modified_files"] = [x for x in r.get("modified_files", []) if x]
+        return res
+
+    def _neo4j_get_issue_details(self, issue_identifier: str) -> Optional[Dict[str, Any]]:
+        clean = issue_identifier.strip().lstrip("#")
+        target_int = int(clean) if clean.isdigit() else None
+        cypher = """
+        MATCH (i:Issue)
+        WHERE i.node_id = $target OR i.node_id ENDS WITH (':' + $clean) OR ($target_int IS NOT NULL AND i.number = $target_int)
+        OPTIONAL MATCH (author:User)-[:CREATED]->(i)
+        OPTIONAL MATCH (assignee:User)-[:ASSIGNED_TO]->(i)
+        OPTIONAL MATCH (pr:PullRequest)-[:CLOSES]->(i)
+        OPTIONAL MATCH (i)-[:TAGGED_WITH]->(lbl:Label)
+        RETURN properties(i) AS issue,
+               author.login AS author,
+               collect(DISTINCT assignee.login) AS assignees,
+               collect(DISTINCT lbl.name) AS labels,
+               collect(DISTINCT {number: pr.number, title: pr.title, state: pr.state, author: pr.author_login}) AS closing_prs
+        LIMIT 1
+        """
+        rows = self.neo4j_client.run_query(cypher, {"target": issue_identifier, "clean": clean, "target_int": target_int})
+        if not rows:
+            return None
+        r = rows[0]
+        res = dict(r.get("issue") or {})
+        res["author"] = r.get("author") or res.get("author_login")
+        res["assignees"] = [x for x in r.get("assignees", []) if x]
+        res["labels"] = [x for x in r.get("labels", []) if x]
+        res["closing_prs"] = [x for x in r.get("closing_prs", []) if x and x.get("number")]
+        return res
+
+    def _neo4j_get_labeled_items(self, label_name: str) -> Dict[str, Any]:
+        cypher = """
+        MATCH (lbl:Label)
+        WHERE toLower(lbl.name) = toLower($label) OR lbl.node_id ENDS WITH (':' + $label)
+        OPTIONAL MATCH (i:Issue)-[:TAGGED_WITH]->(lbl)
+        OPTIONAL MATCH (pr:PullRequest)-[:TAGGED_WITH]->(lbl)
+        RETURN lbl.name AS label,
+               collect(DISTINCT {number: i.number, title: i.title, state: i.state}) AS issues,
+               collect(DISTINCT {number: pr.number, title: pr.title, state: pr.state}) AS pull_requests
+        LIMIT 1
+        """
+        rows = self.neo4j_client.run_query(cypher, {"label": label_name.strip()})
+        if not rows:
+            return {"label": label_name, "issues": [], "pull_requests": [], "total_count": 0}
+        r = rows[0]
+        issues = [x for x in r.get("issues", []) if x and x.get("number")]
+        prs = [x for x in r.get("pull_requests", []) if x and x.get("number")]
+        return {
+            "label": r.get("label") or label_name,
+            "issues": issues,
+            "pull_requests": prs,
+            "total_count": len(issues) + len(prs),
+        }
+
+    def _neo4j_get_team_overview(self, team_slug_or_id: str) -> Dict[str, Any]:
+        cypher = """
+        MATCH (t:Team)
+        WHERE t.slug = $slug OR t.node_id ENDS WITH $slug
+        OPTIONAL MATCH (u:User)-[:MEMBER_OF]->(t)
+        OPTIONAL MATCH (t)-[:HAS_ACCESS_TO]->(r:Repository)
+        RETURN t.slug AS team,
+               collect(DISTINCT u.login) AS members,
+               collect(DISTINCT r.full_name) AS accessible_repos
+        LIMIT 1
+        """
+        rows = self.neo4j_client.run_query(cypher, {"slug": team_slug_or_id.strip()})
+        if not rows:
+            return {"team": team_slug_or_id, "members": [], "accessible_repos": []}
+        r = rows[0]
+        return {
+            "team": r.get("team") or team_slug_or_id,
+            "members": [x for x in r.get("members", []) if x],
+            "accessible_repos": [x for x in r.get("accessible_repos", []) if x],
+        }
+
+    def _neo4j_get_repo_overview(self, repo_name: str) -> Dict[str, Any]:
+        cypher = """
+        MATCH (r:Repository)
+        WHERE r.full_name = $repo_name OR r.name = $repo_name OR r.node_id ENDS WITH $repo_name
+        OPTIONAL MATCH (r)-[:CONTAINS]->(f:File)
+        OPTIONAL MATCH (t:Team)-[:HAS_ACCESS_TO]->(r)
+        RETURN r.full_name AS repository,
+               count(DISTINCT f) AS files_count,
+               collect(DISTINCT t.slug) AS teams_with_access,
+               r.open_issues_count AS open_issues_count,
+               r.stargazers_count AS stargazers_count,
+               r.default_branch AS default_branch
+        LIMIT 1
+        """
+        rows = self.neo4j_client.run_query(cypher, {"repo_name": repo_name.strip()})
+        if not rows:
+            return {"repository": repo_name, "files_count": 0, "teams_with_access": []}
+        r = rows[0]
+        return {
+            "repository": r.get("repository") or repo_name,
+            "files_count": r.get("files_count", 0),
+            "teams_with_access": [x for x in r.get("teams_with_access", []) if x],
+            "open_issues_count": r.get("open_issues_count", 0),
+            "stargazers_count": r.get("stargazers_count", 0),
+            "default_branch": r.get("default_branch", "main"),
+        }
+
 
     def format_as_chunk(self, data: Any, operation: str, target: str) -> Optional[Dict[str, Any]]:
         """Converts raw graph query output into a standard evidence chunk for LLM synthesis."""

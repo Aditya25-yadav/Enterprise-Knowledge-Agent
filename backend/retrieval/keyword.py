@@ -73,6 +73,7 @@ class KeywordRetriever:
             user_groups=user_groups,
             source=source,
             resource_type=resource_type,
+            user_context=user_context,
         )
 
         if not results:

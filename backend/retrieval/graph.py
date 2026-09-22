@@ -36,20 +36,20 @@ class GraphRetriever:
         payload: Dict[str, Any],
         user_roles_set: Set[str],
         user_id: Optional[str],
-        user_groups_set: Set[str],
+        user_groups: Optional[Any] = None,
+        user_context: Optional[Dict[str, Any]] = None,
     ) -> bool:
         """Helper to enforce strict RBAC pre-filtering on a chunk payload."""
-        is_public = payload.get("is_public", True)
-        allowed_roles = set(payload.get("allowed_roles") or [])
-        allowed_users = payload.get("allowed_users") or []
-        allowed_groups = set(payload.get("allowed_groups") or [])
+        from backend.security import get_default_rbac_resolver
 
-        return (
-            is_public
-            or bool(user_roles_set.intersection(allowed_roles))
-            or bool(user_id and user_id in allowed_users)
-            or bool(user_groups_set.intersection(allowed_groups))
+        sec_ctx = get_default_rbac_resolver().resolve_context(
+            user_context or {
+                "roles": list(user_roles_set),
+                "user_id": user_id,
+                "groups": list(user_groups) if isinstance(user_groups, (set, list)) else [],
+            }
         )
+        return get_default_rbac_resolver().evaluate_access(sec_ctx, payload).is_allowed
 
     def _format_chunk(self, payload: Dict[str, Any], score: float = 1.0) -> Dict[str, Any]:
         """Formats chunk dictionary with safe defaults and 100% metadata preservation."""

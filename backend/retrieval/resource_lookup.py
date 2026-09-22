@@ -57,14 +57,12 @@ class ResourceLookupRetriever:
 
         target = resource_id.strip()
 
-        # Unpack user_context if provided
-        if user_context:
-            user_roles = user_roles or user_context.get("roles") or user_context.get("allowed_roles")
-            user_id = user_id or user_context.get("user_id")
-            user_groups = user_groups or user_context.get("groups")
+        from backend.security import QdrantFilterTranslator, get_default_rbac_resolver
 
-        user_roles_set = set(user_roles or [])
-        user_groups_set = set(user_groups or [])
+        resolver = get_default_rbac_resolver()
+        sec_ctx = resolver.resolve_context(
+            user_context or {"roles": user_roles or ["employee"], "user_id": user_id, "groups": user_groups or []}
+        )
 
         matches: List[Dict[str, Any]] = []
 
@@ -86,20 +84,8 @@ class ResourceLookupRetriever:
             if not is_match:
                 continue
 
-            # RBAC Pre-Filter
-            is_public = payload.get("is_public", True)
-            allowed_roles = set(payload.get("allowed_roles") or [])
-            allowed_users = payload.get("allowed_users") or []
-            allowed_groups = set(payload.get("allowed_groups") or [])
-
-            can_access = (
-                is_public
-                or bool(user_roles_set.intersection(allowed_roles))
-                or (user_id and user_id in allowed_users)
-                or bool(user_groups_set.intersection(allowed_groups))
-            )
-
-            if not can_access:
+            # Centralized RBAC Pre-Filter
+            if not resolver.evaluate_access(sec_ctx, payload).is_allowed:
                 continue
 
             item = dict(payload)
@@ -116,28 +102,10 @@ class ResourceLookupRetriever:
         if not matches and hasattr(self.vector_store, "_client"):
             try:
                 from qdrant_client.http import models as rest
-                # Build RBAC filter
-                rbac_should: List[rest.Condition] = [
-                    rest.FieldCondition(key="is_public", match=rest.MatchValue(value=True))
-                ]
-                if user_roles:
-                    rbac_should.append(
-                        rest.FieldCondition(key="allowed_roles", match=rest.MatchAny(any=user_roles))
-                    )
-                if user_id:
-                    rbac_should.append(
-                        rest.FieldCondition(key="allowed_users", match=rest.MatchValue(value=user_id))
-                    )
-                if user_groups:
-                    rbac_should.append(
-                        rest.FieldCondition(key="allowed_groups", match=rest.MatchAny(any=user_groups))
-                    )
 
-                resource_filter = rest.Filter(
-                    must=[
-                        rest.FieldCondition(key="resource_id", match=rest.MatchValue(value=target)),
-                        rest.Filter(should=rbac_should),
-                    ]
+                resource_filter = QdrantFilterTranslator.build_filter(
+                    context=sec_ctx,
+                    extra_filters=[rest.FieldCondition(key="resource_id", match=rest.MatchValue(value=target))],
                 )
 
                 scroll_results, _ = self.vector_store._client.scroll(

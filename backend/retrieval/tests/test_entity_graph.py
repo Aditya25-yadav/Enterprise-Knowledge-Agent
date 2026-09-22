@@ -309,6 +309,53 @@ class TestEntityGraphRetriever(unittest.TestCase):
         self.assertIn("src/engine.py", res_json)
         self.assertIn("bob", res_json)
 
+    def test_13_native_neo4j_mode_cypher_dispatch(self) -> None:
+        """Verifies that in Neo4j mode, EntityGraphRetriever dispatches parameterized Cypher to neo4j_client."""
+        class MockNeo4jClient:
+            def __init__(self) -> None:
+                self.queries_run: List[Tuple[str, Dict[str, Any]]] = []
+
+            def test_connection(self) -> bool:
+                return True
+
+            def run_query(self, cypher: str, params: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+                self.queries_run.append((cypher, params or {}))
+                # Return mock PR row
+                if "MATCH (pr:PullRequest)" in cypher:
+                    return [{
+                        "pr": {"node_id": "github:pr:company/payments:142", "number": 142, "title": "Fix 3DS timeout", "state": "MERGED"},
+                        "author": "alice",
+                        "reviewers": ["bob"],
+                        "assignees": [],
+                        "modified_files": ["backend/services/checkout.py"],
+                        "closed_issues": [{"number": 928, "title": "3DS timeout", "state": "closed"}],
+                    }]
+                elif "shortestPath" in cypher:
+                    return [{
+                        "nodes": [{"node_id": "github:user:alice", "label": "User"}, {"node_id": "github:file:company/payments:checkout.py", "label": "File"}],
+                        "rels": ["MODIFIES"],
+                    }]
+                return []
+
+        mock_neo4j = MockNeo4jClient()
+        neo4j_retriever = EntityGraphRetriever(neo4j_client=mock_neo4j)
+        self.assertEqual(neo4j_retriever.mode, "neo4j")
+
+        # 1. Test get_pr_details via native Cypher
+        pr_details = neo4j_retriever.search("get_pr_details", "142")
+        self.assertIsNotNone(pr_details)
+        self.assertEqual(pr_details["author"], "alice")
+        self.assertEqual(pr_details["reviewers"], ["bob"])
+        self.assertGreater(len(mock_neo4j.queries_run), 0)
+        self.assertIn("MATCH (pr:PullRequest)", mock_neo4j.queries_run[-1][0])
+        self.assertEqual(mock_neo4j.queries_run[-1][1]["target_int"], 142)
+
+        # 2. Test find_path via native Cypher
+        path = neo4j_retriever.search("find_path", "github:user:alice", {"end_id": "github:file:company/payments:checkout.py"})
+        self.assertIsNotNone(path)
+        self.assertEqual(len(path), 2)
+        self.assertIn("shortestPath", mock_neo4j.queries_run[-1][0])
+
 
 if __name__ == "__main__":
     unittest.main()
