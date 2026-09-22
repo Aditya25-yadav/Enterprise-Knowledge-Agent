@@ -3317,6 +3317,7 @@ That's exactly where agentic architecture provides value.
 ## 1. The Core Principle: Structure-First, Chunk-Second
 
 A naive approach of splitting text purely by token or character counts (e.g. `text[:500]`) fundamentally breaks down in enterprise knowledge systems. It destroys:
+
 - **Hierarchical Context**: Detaching subheadings, bullet items, or table rows from their parent sections.
 - **Sequential Procedures**: Breaking ordered steps (`Step 1`, `Step 2`, `Step 3`), runbooks, and installation guides into disjointed fragments.
 - **Relational Integrity**: Severing conversations (Slack/Gmail threads), code classes/functions, and issue comments.
@@ -3378,6 +3379,7 @@ Document
 ```
 
 Each child chunk is embedded for precise vector matching, but retains references to:
+
 - `parent_id`: Identifier of parent section / container.
 - `parent_text`: Summary or header block of the parent section for small-to-large context expansion.
 - `section_path`: Complete breadcrumb hierarchy (e.g. `["Authentication", "OAuth 2.0", "PKCE Flow"]`).
@@ -3403,24 +3405,29 @@ Different data types require distinct structural treatment:
 ```
 
 ### Strategy A: Hierarchical Document Chunker (Notion, Drive, Confluence, PDFs)
+
 - Maintains a heading stack (`#`, `##`, `###`).
 - Attaches `section_path: ["Parent", "SubSection", "Detail"]`.
 - Retains tables and code fences as atomic units within their sections.
 
 ### Strategy B: Procedure & Sequence Chunker (Runbooks, Setup Steps, Workflows)
+
 - Identifies ordered lists and steps (`Step 1:`, `1.`, `2.`, `Phase A`).
 - Populates `sequence: { sequence_id: "auth_setup", step: 2, total_steps: 5 }`.
 - Enables automatic multi-step expansion during retrieval.
 
 ### Strategy C: Conversation Thread Chunker (Gmail, Slack)
+
 - The **thread** is the semantic unit, containing individual messages and replies.
 - Retains message ordering, timestamps, and participant metadata (`sender`, `recipients`, `channel`).
 
 ### Strategy D: AST / Code Symbol Chunker (GitHub Source Code)
+
 - Divides code along function, class, and method boundaries rather than raw line counts.
 - Captures `language`, `symbol_name`, `start_line`, and `end_line`.
 
 ### Strategy E: Tabular & Database Chunker (Databases & Spreadsheets)
+
 - Preserves table column headers on every chunk.
 - Generates natural language row summaries for dense embedding alongside structured Markdown tables.
 
@@ -3437,33 +3444,33 @@ Different data types require distinct structural treatment:
   "title": "Auth Architecture",
   "url": "https://github.com/owner/repo/blob/main/docs/auth.md",
   "text": "### Step 2: Validate JWT Signature\nValidate token with RS256 public key...",
-  
+
   "content_type": "procedure_step",
   "parent_id": "section_auth_flow",
   "parent_text": "## Authentication Flow\nComplete 4-step sequence for OAuth token verification...",
-  
+
   "prev_chunk_id": "github:repo:owner/repo#c2",
   "next_chunk_id": "github:repo:owner/repo#c4",
   "chunk_index": 3,
   "total_chunks": 12,
-  
+
   "section_path": ["Authentication", "OAuth 2.0", "Token Verification"],
   "section_heading": "### Step 2: Validate JWT Signature",
-  
+
   "sequence": {
     "sequence_id": "oauth_token_verification",
     "step": 2,
     "total_steps": 4,
     "step_title": "Validate JWT Signature"
   },
-  
+
   "permissions": {
     "is_public": false,
     "allowed_roles": ["engineer"],
     "allowed_users": [],
     "allowed_groups": ["security-team"]
   },
-  
+
   "created_at": "2026-09-01T00:00:00Z",
   "updated_at": "2026-09-04T00:00:00Z",
   "extra_metadata": {
@@ -3512,6 +3519,7 @@ The LLM receives the complete, cohesive multi-step procedure rather than a fragm
 ## 1. Workload Analysis for Enterprise Knowledge Agents
 
 Enterprise knowledge workloads are uniquely heterogeneous compared to standard web search benchmarks:
+
 - **Diverse Modalities**: Formal architecture docs (PDF/Notion), conversational threads (Gmail/Slack), structured issue tracking (Jira/GitHub PRs), source code (Python, JS, Go), and tabular records.
 - **Multilingual Requirements**: Enterprise teams communicate across multiple languages.
 - **Hybrid Retrieval Compatibility**: The embedding model must operate alongside BM25 lexical search, Graph RAG traversals, and Cross-Encoder rerankers in an RRF (Reciprocal Rank Fusion) pipeline.
@@ -3520,12 +3528,12 @@ Enterprise knowledge workloads are uniquely heterogeneous compared to standard w
 
 ## 2. Model Evaluation & Comparison
 
-| Model | Size / VRAM | Context Window | Strengths | Best Fit Role |
-| :--- | :--- | :--- | :--- | :--- |
-| **Qwen3-Embedding-0.6B** | ~1.2 GB VRAM | Up to 32K tokens | Fast, lightweight, code-aware, multilingual | 🥇 **Initial Development & Local Testing** |
-| **Qwen3-Embedding-4B** | ~8 GB VRAM | Up to 32K tokens | Top-tier retrieval accuracy across text + code + structured data | 🏆 **Production Deployment** |
-| **BAAI/bge-m3** | ~2.5 GB VRAM | Up to 8192 tokens | Multi-functionality (Dense + Sparse/Lexical + Multi-Vector) in one model | 🥈 **Hybrid Multi-Vector Alternative** |
-| **BAAI/bge-base-en-v1.5** | ~0.5 GB VRAM | 512 tokens | Lightweight 768-dim baseline, ultra-fast CPU inference | ⚙️ **In-Memory Unit Testing** |
+| Model                     | Size / VRAM  | Context Window    | Strengths                                                                | Best Fit Role                              |
+| :------------------------ | :----------- | :---------------- | :----------------------------------------------------------------------- | :----------------------------------------- |
+| **Qwen3-Embedding-0.6B**  | ~1.2 GB VRAM | Up to 32K tokens  | Fast, lightweight, code-aware, multilingual                              | 🥇 **Initial Development & Local Testing** |
+| **Qwen3-Embedding-4B**    | ~8 GB VRAM   | Up to 32K tokens  | Top-tier retrieval accuracy across text + code + structured data         | 🏆 **Production Deployment**               |
+| **BAAI/bge-m3**           | ~2.5 GB VRAM | Up to 8192 tokens | Multi-functionality (Dense + Sparse/Lexical + Multi-Vector) in one model | 🥈 **Hybrid Multi-Vector Alternative**     |
+| **BAAI/bge-base-en-v1.5** | ~0.5 GB VRAM | 512 tokens        | Lightweight 768-dim baseline, ultra-fast CPU inference                   | ⚙️ **In-Memory Unit Testing**              |
 
 ---
 
@@ -3562,5 +3570,820 @@ Content:
 Compute the SHA-256 hash of the code verifier and base64url encode the digest...
 ```
 
-* **For Vector Indexing**: The context-enriched text is embedded into the dense vector.
-* **For LLM Generation**: The original clean `chunk.text` is preserved in the payload to keep LLM context prompts clean and free of repetitive metadata headers.
+- **For Vector Indexing**: The context-enriched text is embedded into the dense vector.
+- **For LLM Generation**: The original clean `chunk.text` is preserved in the payload to keep LLM context prompts clean and free of repetitive metadata headers.
+
+---
+
+Phase 7 is essentially where your RAG system stops being **“retrieve → generate”** and becomes **“retrieve → inspect → decide → retrieve again if necessary → generate.”**
+
+Your architecture already has the right foundation: the planner selects vector/graph/metadata retrieval, and the response generator produces a grounded answer. Phase 7 adds a **quality-control loop between retrieval and generation**.
+
+## 1. Why do we need an `EvidenceEvaluator`?
+
+Suppose the user asks:
+
+> “Which team owns the payment service, and what other projects does that team support?”
+
+Your planner might decide:
+
+```text
+User Query
+   ↓
+Planner
+   ↓
+Graph Search
+   ↓
+Retrieved evidence
+```
+
+But retrieval isn't guaranteed to be correct.
+
+You might retrieve:
+
+```text
+Chunk 1:
+"Payment Service is maintained by the Platform Engineering team."
+
+Chunk 2:
+"Platform Engineering owns the Checkout API."
+
+Chunk 3:
+"Payments team worked on Project Phoenix."
+```
+
+The problem is that these chunks may **look relevant individually**, but together they may not establish the complete answer.
+
+The evaluator asks:
+
+> **Do I actually have enough trustworthy evidence to answer the user's question?**
+
+This is different from simply asking whether the chunks are semantically similar.
+
+Your architecture already identifies hybrid retrieval as Vector + Graph + Keyword + Metadata search. Phase 7 adds a validation layer on top of that retrieval.
+
+---
+
+# 2. What exactly does `EvidenceEvaluator` do?
+
+I would give it **three responsibilities**.
+
+### A. Relevance evaluation
+
+For every retrieved piece of evidence:
+
+> Does this evidence actually help answer the query?
+
+For example:
+
+**Query**
+
+> Who owns Payment Service?
+
+**Chunk A**
+
+> "Payment Service is owned by Platform Engineering."
+
+→ Highly relevant.
+
+**Chunk B**
+
+> "Platform Engineering uses Kubernetes for deployment."
+
+→ Related, but not directly useful.
+
+**Chunk C**
+
+> "The company launched a new HR portal."
+
+→ Irrelevant.
+
+The evaluator can assign something like:
+
+```json
+{
+  "chunk_id": "chunk_123",
+  "relevance": 0.96
+}
+```
+
+---
+
+### B. Evidence sufficiency
+
+This is more important.
+
+The evaluator asks:
+
+> **Even if the retrieved chunks are relevant, do they contain enough information to answer the entire question?**
+
+Consider:
+
+> "Which team owns Payment Service and what other projects does that team support?"
+
+You retrieve:
+
+```text
+Payment Service → Platform Engineering
+```
+
+That's enough to answer **who owns it**.
+
+But you don't have evidence for:
+
+```text
+Platform Engineering → Project A
+Platform Engineering → Project B
+```
+
+Therefore:
+
+```text
+relevance = HIGH
+sufficiency = LOW
+```
+
+That's exactly the situation where your agent should **retrieve again** rather than hallucinate.
+
+---
+
+### C. Decide what to do next
+
+The evaluator produces a decision such as:
+
+```text
+SUFFICIENT
+```
+
+or
+
+```text
+INSUFFICIENT
+```
+
+But I'd recommend making it slightly richer:
+
+```json
+{
+  "decision": "RETRIEVE_MORE",
+  "reason": "Ownership is established, but no evidence connects Platform Engineering to other projects.",
+  "missing_information": ["projects supported by Platform Engineering"],
+  "recommended_strategy": "GRAPH_SEARCH"
+}
+```
+
+Now the evaluator isn't just a grader.
+
+It becomes a **feedback mechanism for the agent**.
+
+---
+
+# 3. This is where the LangGraph reflection loop comes in
+
+Your original pipeline is approximately:
+
+```text
+User Query
+    ↓
+Intent Detection
+    ↓
+Planner
+    ↓
+Tool Selection
+    ↓
+Retrieval
+    ↓
+LLM
+    ↓
+Answer
+```
+
+Your architecture document currently describes the planner selecting Vector, Graph, and Metadata search before context fusion and generation.
+
+Phase 7 changes this to:
+
+```text
+                         ┌──────────────────────┐
+                         │                      │
+                         ▼                      │
+User Query → Reasoner → Tool Node → Evaluator ──┤
+                                      │         │
+                                      │         │
+                              ┌───────┴───────┐  │
+                              │               │  │
+                         INSUFFICIENT     SUFFICIENT
+                              │               │
+                              ▼               ▼
+                         Reformulate       Generator
+                              │
+                              ▼
+                           Reasoner
+```
+
+That's the important architectural change.
+
+---
+
+# 4. What is the `Reasoner` doing?
+
+Don't think of the reasoner as the final answer-generating LLM.
+
+Its job is:
+
+> **Figure out what information we need and how to obtain it.**
+
+For example:
+
+### Query
+
+> "What projects are supported by the team responsible for Payment Service?"
+
+Reasoner might produce:
+
+```text
+Step 1:
+Find Payment Service.
+
+Step 2:
+Determine owning team.
+
+Step 3:
+Find projects associated with that team.
+```
+
+Then it calls tools.
+
+```text
+Reasoner
+   ↓
+Graph Search
+```
+
+---
+
+# 5. What is the `Tool Node`?
+
+This is where actual retrieval happens.
+
+For example:
+
+```python
+tools = [
+    vector_search,
+    keyword_search,
+    graph_search,
+    metadata_search
+]
+```
+
+The reasoner selects one or more.
+
+For example:
+
+```text
+reasoner
+   ↓
+graph_search(
+    entity="Payment Service",
+    relation="OWNED_BY"
+)
+```
+
+Result:
+
+```text
+Payment Service
+       ↓ OWNED_BY
+Platform Engineering
+```
+
+Then the result goes to the evaluator.
+
+---
+
+# 6. The important part: evaluator detects the knowledge gap
+
+The evaluator sees:
+
+```text
+Question:
+"What projects are supported by the team responsible for Payment Service?"
+
+Evidence:
+
+Payment Service
+      ↓
+Platform Engineering
+```
+
+It realizes:
+
+> I know the team, but I don't know the projects.
+
+So:
+
+```json
+{
+  "status": "INSUFFICIENT",
+  "missing": "Projects supported by Platform Engineering"
+}
+```
+
+This is where **reflection** happens.
+
+The system effectively says:
+
+> "My previous retrieval wasn't enough. I need to change my approach."
+
+---
+
+# 7. Reformulation
+
+The system can now transform the original question into a better retrieval query.
+
+Original:
+
+```text
+What projects are supported by the team responsible for Payment Service?
+```
+
+After reasoning:
+
+```text
+Which projects are supported by Platform Engineering?
+```
+
+Then:
+
+```text
+Reformulated Query
+        ↓
+Graph Search
+        ↓
+```
+
+Maybe the graph returns:
+
+```text
+Platform Engineering
+       ├── SUPPORTS → Project Phoenix
+       ├── SUPPORTS → Project Atlas
+       └── SUPPORTS → Project Mercury
+```
+
+Now the evaluator gets:
+
+```text
+Evidence:
+Payment Service → Platform Engineering
+
+Platform Engineering → Phoenix
+Platform Engineering → Atlas
+Platform Engineering → Mercury
+```
+
+This time:
+
+```text
+SUFFICIENT
+```
+
+and the generator gets the evidence.
+
+---
+
+# 8. So your complete Phase 7 loop becomes
+
+I'd implement it conceptually as:
+
+```text
+                    ┌─────────────────────┐
+                    │                     │
+                    ▼                     │
+                ┌─────────┐               │
+User Query ───→ │ Reasoner│               │
+                └────┬────┘               │
+                     │                     │
+                     ▼                     │
+                ┌─────────┐               │
+                │  Tools  │               │
+                │─────────│               │
+                │ Vector  │               │
+                │ Keyword │               │
+                │ Graph   │               │
+                │ Metadata│               │
+                └────┬────┘               │
+                     │                     │
+                     ▼                     │
+             ┌────────────────┐            │
+             │EvidenceEvaluator│            │
+             └───────┬────────┘            │
+                     │                     │
+              ┌──────┴──────┐              │
+              │             │              │
+        INSUFFICIENT     SUFFICIENT        │
+              │             │              │
+              ▼             ▼              │
+        ┌────────────┐  ┌─────────┐         │
+        │Reformulate │  │Generator│         │
+        └─────┬──────┘  └────┬────┘         │
+              │              │              │
+              └──────────────┘              │
+                     │                      │
+                     ▼                      │
+                   Answer                   │
+                                            │
+              ──────────────────────────────┘
+                 retry retrieval
+```
+
+---
+
+# 9. LangGraph makes this very natural
+
+Your graph can look something like:
+
+```python
+workflow.add_node("reasoner", reasoner)
+workflow.add_node("tool_node", tool_node)
+workflow.add_node("evaluator", evaluator)
+workflow.add_node("reformulator", reformulator)
+workflow.add_node("generator", generator)
+```
+
+Then:
+
+```text
+START
+  ↓
+reasoner
+  ↓
+tool_node
+  ↓
+evaluator
+  ↓
+conditional edge
+ ├── sufficient ──→ generator
+ │                     ↓
+ │                    END
+ │
+ └── insufficient → reformulator
+                       ↓
+                    reasoner
+                       ↓
+                    tool_node
+                       ↓
+                   evaluator
+```
+
+This is much better than hardcoding:
+
+```python
+retrieve()
+retrieve_again()
+generate()
+```
+
+because the **graph decides dynamically** whether another retrieval cycle is required.
+
+---
+
+# 10. What should the LangGraph state contain?
+
+This is an important design decision.
+
+I'd make your state approximately:
+
+```python
+class AgentState(TypedDict):
+    query: str
+
+    current_query: str
+
+    reasoning: str
+
+    retrieved_evidence: list
+
+    tool_calls: list
+
+    evaluation: dict
+
+    missing_information: list
+
+    retrieval_attempts: int
+
+    answer: str
+
+    citations: list
+```
+
+For example:
+
+```json
+{
+  "query": "What projects does the team owning Payment Service support?",
+
+  "current_query": "What projects does the team owning Payment Service support?",
+
+  "retrieved_evidence": [...],
+
+  "evaluation": {
+      "relevant": true,
+      "sufficient": false,
+      "missing": [
+          "projects supported by Platform Engineering"
+      ]
+  },
+
+  "retrieval_attempts": 1
+}
+```
+
+After reformulation:
+
+```json
+{
+  "current_query": "Which projects are supported by Platform Engineering?",
+
+  "retrieval_attempts": 2
+}
+```
+
+---
+
+# 11. Important distinction: evaluator ≠ hallucination detector
+
+This distinction is useful for your architecture.
+
+The `EvidenceEvaluator` primarily operates **before generation**.
+
+It asks:
+
+> "Do I have enough evidence?"
+
+A hallucination/faithfulness checker operates **after generation**.
+
+It asks:
+
+> "Did the generated answer stay faithful to the evidence?"
+
+So eventually you could have:
+
+```text
+                 RETRIEVAL
+                    ↓
+              EVIDENCE EVALUATOR
+                    ↓
+              sufficient?
+                /       \
+              no         yes
+              ↓           ↓
+         re-retrieve    GENERATE
+                          ↓
+                    FAITHFULNESS
+                       CHECK
+                       /   \
+                     no     yes
+                     ↓       ↓
+                  revise   answer
+```
+
+For **Phase 7**, however, I'd keep the scope to the first evaluator. Don't make the system unnecessarily complex yet.
+
+---
+
+# 12. How this fits your existing Hybrid Graph RAG
+
+This is particularly useful for your project because your architecture isn't just vector RAG.
+
+You have:
+
+```text
+Vector
+Keyword
+Graph
+Metadata
+```
+
+The evaluator can actually influence **which retrieval strategy comes next**.
+
+Example:
+
+### Query
+
+> "Who owns Service X?"
+
+Initial retrieval:
+
+```text
+Vector Search
+```
+
+Evaluator:
+
+```text
+Sufficient = TRUE
+```
+
+Done.
+
+---
+
+### Query
+
+> "Which projects does the team that owns Service X support?"
+
+Initial:
+
+```text
+Vector Search
+```
+
+Evaluator:
+
+```text
+We found Service X → Team A
+but no Team A → Project relationships.
+```
+
+Then:
+
+```text
+Recommended next tool = Graph Search
+```
+
+---
+
+### Query
+
+> "What is Jira ticket PROJ-1827 about?"
+
+Reasoner may use:
+
+```text
+Keyword Search
+```
+
+because the exact ticket ID is important.
+
+---
+
+### Query
+
+> "What documents mention the authentication architecture?"
+
+Could use:
+
+```text
+Vector + Keyword
+```
+
+---
+
+This is exactly where your **agentic architecture becomes meaningful**, rather than just adding an LLM and calling it an agent.
+
+Your README explicitly defines the planner as an LLM-driven router that can choose and chain retrieval tools. Phase 7 gives that planner a **feedback signal**.
+
+---
+
+# 13. The key concept: retrieval becomes iterative
+
+Traditional RAG:
+
+```text
+Query
+ ↓
+Retrieve Top-K
+ ↓
+Generate
+```
+
+Your Phase 7 RAG:
+
+```text
+Query
+ ↓
+Reason
+ ↓
+Retrieve
+ ↓
+Evaluate
+ ↓
+Enough?
+ ├── YES → Generate
+ │
+ └── NO
+      ↓
+   Identify gap
+      ↓
+   Reformulate
+      ↓
+   Retrieve again
+      ↓
+   Evaluate again
+      ↓
+   ...
+```
+
+This is often called **iterative retrieval / corrective retrieval / reflective retrieval**, depending on the exact implementation.
+
+The important idea isn't the name.
+
+It's:
+
+> **The system does not blindly trust its first retrieval result.**
+
+---
+
+# 14. One thing I'd strongly recommend for your implementation
+
+Don't let the evaluator simply return:
+
+```python
+True / False
+```
+
+Make it structured.
+
+Something like:
+
+```python
+class EvaluationResult(BaseModel):
+    relevance_score: float
+    evidence_sufficient: bool
+    missing_information: list[str]
+    unsupported_claims: list[str]
+    recommended_action: Literal[
+        "GENERATE",
+        "RETRIEVE_MORE",
+        "REFORMULATE"
+    ]
+    recommended_tool: str | None
+```
+
+Example:
+
+```json
+{
+  "relevance_score": 0.91,
+  "evidence_sufficient": false,
+  "missing_information": ["Projects supported by Platform Engineering"],
+  "unsupported_claims": [],
+  "recommended_action": "RETRIEVE_MORE",
+  "recommended_tool": "graph_search"
+}
+```
+
+Now your evaluator becomes an actual **control node in LangGraph**, rather than merely an LLM judging retrieval quality.
+
+---
+
+## 15. Where Phase 7 sits in your overall Enterprise Knowledge Agent
+
+Your final architecture becomes:
+
+```text
+                 ENTERPRISE SOURCES
+                        ↓
+                   CONNECTORS
+                        ↓
+                 OKF / PROCESSING
+                        ↓
+          ┌─────────────┴─────────────┐
+          ↓                           ↓
+      Vector DB                   Graph DB
+          │                           │
+          └─────────────┬─────────────┘
+                        ↓
+                 ┌─────────────┐
+                 │   REASONER  │
+                 └──────┬──────┘
+                        ↓
+                  TOOL CALLING
+                        ↓
+            Vector / Graph / BM25
+                        ↓
+              ┌──────────────────┐
+              │EvidenceEvaluator │
+              └────────┬─────────┘
+                       ↓
+                 ┌─────┴─────┐
+                 │           │
+             SUFFICIENT   INSUFFICIENT
+                 │           │
+                 ↓           ↓
+             GENERATE    REFORMULATE
+                 │           │
+                 ↓           └──→ REASONER
+              CITATIONS
+                 ↓
+               ANSWER
+```
+
+That fits very cleanly with your existing architecture, which already calls for **Hybrid Retrieval, Graph RAG, Intelligent Planning, Tool Calling, metadata-aware retrieval, and RBAC**.
+
+### In one sentence
+
+**Phase 7 gives your agent the ability to recognize “I don't have enough evidence yet,” identify what is missing, change its retrieval strategy/query, and try again before generating an answer.**
+
+And for your particular Enterprise Knowledge Agent, **this is the phase where the combination of LangGraph + tool calling + Hybrid RAG + Graph RAG starts behaving like an actual agentic retrieval system rather than a conventional RAG pipeline.**

@@ -1197,6 +1197,160 @@ This document maintains a chronological record of all architectural decisions, c
 - [`scripts/verify_phase5.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/scripts/verify_phase5.py)
 - [`docs/verify_phase5.md`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/docs/verify_phase5.md)
 
+---
+
+## Step 62: Conditional Payload Index Creation for Qdrant Server Mode (`qdrant_client.py`)
+- **Date:** 2026-09-22
+- **Time:** 10:00 IST
+- **Purpose:** Wrapped `self._client.create_payload_index(...)` with `if self.mode == "server":` to eliminate the `UserWarning: Payload indexes have no effect in the local Qdrant` when running in local disk or in-memory mode, while preserving inverted payload index creation when connected to a production Qdrant server daemon.
+
+### Files Modified:
+- [`backend/storage/qdrant_client.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/storage/qdrant_client.py)
+
+---
+
+## Step 63: Implemented `ResourceLookupRetriever` (`backend/retrieval/resource_lookup.py`)
+- **Date:** 2026-09-22
+- **Time:** 10:05 IST
+- **Purpose:** Created `ResourceLookupRetriever` to provide deterministic, zero-embedding-overhead lookup of full documents, resources, or chunks by their canonical URI (e.g. `github://repo/owner/name`, `notion://vault/master`, `jira://issue/PAY-928`), URL, chunk ID, or exact title, with sequential multi-chunk stitching and strict RBAC pre-filtering.
+
+### Key Features:
+1. **Direct Canonical URI & URL Resolution**: Matches against `resource_id`, `url`, `chunk_id`, or `title` without running heavy embedding models.
+2. **Sequential Multi-Chunk Stitching**: `get_document()` aggregates all chunks of a document and reconstructs the full original text in sequential `chunk_index` reading order.
+3. **Database-Level RBAC Enforcement**: Pre-filters unauthorized users against `allowed_roles`, `allowed_users`, and `allowed_groups`.
+
+### Files Created / Modified:
+- [`backend/retrieval/resource_lookup.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/retrieval/resource_lookup.py)
+- [`backend/retrieval/__init__.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/retrieval/__init__.py)
+
+---
+
+## Step 64: Implemented `GraphRetriever` (`backend/retrieval/graph.py`)
+- **Date:** 2026-09-22
+- **Time:** 11:09 IST
+- **Purpose:** Created `GraphRetriever` to traverse structural enterprise knowledge topologies, enabling parent-child hierarchy navigation, horizontal bidirectional sibling expansion, and multi-step procedure/runbook assembly with strict database-level RBAC pre-filtering.
+
+### Key Features Built:
+1. **Parent-Child Hierarchy Navigation (`get_children`)**: Traverses repo-to-files/issues, epic-to-subtasks, and folder-to-child hierarchies.
+2. **Horizontal Sibling Expansion (`get_neighbors`)**: Follows `prev_chunk_id` and `next_chunk_id` bidirectional links across a configurable window (`window_before`, `window_after`) to recover neighboring context around matched chunks.
+3. **Procedure & Sequence Assembly (`get_full_sequence`)**: Reconstructs multi-step ordered workflows by `sequence_id` in ascending step order (1..N).
+4. **RBAC Pre-Filtering**: Enforces security boundaries across all graph traversal hops.
+
+### Files Created / Modified:
+- [`backend/retrieval/graph.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/retrieval/graph.py)
+---
+
+## Step 65: Registered Resource Lookup & Graph Tools and Integrated LangGraph Multi-Hop Reasoning
+- **Date:** 2026-09-22
+- **Time:** 11:20 IST
+- **Purpose:** Registered `resource_lookup` and `graph_traversal` tools in `ToolRegistry` and `langchain_tools.py`, updated `SYSTEM_INSTRUCTION` in `LangGraphAgentPlanner` and `AgentPlanner` for 4-tool single-turn and multi-hop reasoning, and verified with a 9-test unit suite.
+
+### Key Decisions & Implementation Details:
+1. **Tool Registry & LangChain BaseTool Factory**:
+   - Registered `resource_lookup` and `graph_traversal` in `backend/agent/tools.py` and `backend/agent/langchain_tools.py`.
+   - Optimized `create_default_tool_registry()` and `create_langchain_tools()` to share `vector_store` and `bm25_index` instances across retrievers, preventing concurrent file locks in local Qdrant mode.
+2. **Planner System Prompt Upgrades**:
+   - Enhanced `SYSTEM_INSTRUCTION` in `backend/agent/langgraph_planner.py` and `backend/agent/planner.py` with specific tool selection guidelines:
+     - `semantic_search`: Conceptual queries, architecture explanations, runbooks.
+     - `keyword_search`: Exact technical identifiers, Jira keys, PR numbers, error codes, symbols.
+     - `resource_lookup`: Direct canonical URIs, URLs, chunk IDs, or full stitched documents.
+     - `graph_traversal`: Parent-child hierarchy navigation (`get_children`), horizontal sibling expansion (`get_neighbors`), and procedure sequence assembly (`get_full_sequence`).
+     - Multi-turn multi-hop planning instructions.
+3. **Comprehensive LangGraph Test Suite (`backend/agent/tests/test_langgraph_agent.py`) (9/9 passed)**:
+   - `test_04_native_langchain_tools_execution`: Validates all 4 native LangChain tools (`semantic_search`, `keyword_search`, `resource_lookup`, `graph_traversal`).
+   - `test_07_resource_lookup_in_langgraph_loop`: Validates direct document retrieval via `resource_lookup` in LangGraph reasoner loop.
+   - `test_08_graph_traversal_in_langgraph_loop`: Validates parent-child file/doc discovery via `graph_traversal(operation="get_children")`.
+   - `test_09_multihop_reasoning_flow`: Validates 3-turn multi-hop reasoning (Turn 1: `semantic_search` $\to$ Turn 2: `graph_traversal` $\to$ Turn 3: Grounded answer synthesis).
+
+### Files Created / Modified:
+- [`backend/agent/tools.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/agent/tools.py)
+- [`backend/agent/langchain_tools.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/agent/langchain_tools.py)
+- [`backend/agent/langgraph_planner.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/agent/langgraph_planner.py)
+- [`backend/agent/planner.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/agent/planner.py)
+- [`backend/agent/tests/test_langgraph_agent.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/agent/tests/test_langgraph_agent.py)
+
+---
+
+## Step 66: Phase 6 Final Verification & Graph Retrieval Test Suite
+- **Date:** 2026-09-22
+- **Time:** 12:51 IST
+- **Purpose:** Built dedicated unit tests for `ResourceLookupRetriever` and `GraphRetriever`, created visual verification script `scripts/verify_phase6.py`, generated technical report `docs/verify_phase6.md`, and validated 100% test pass rate across retrieval and agent modules.
+
+### Key Verification Highlights:
+1. **Dedicated Graph Retrieval Suite (`backend/retrieval/tests/test_graph_retrievers.py`) (9/9 passed)**:
+   - Direct canonical resource URI, URL, chunk ID, and title lookups.
+   - Sequential multi-chunk document assembly, completeness checking (`is_complete=True`), and section outline extraction.
+   - Parent-child hierarchy navigation (`get_children`) listing all files under a repository.
+   - Horizontal bidirectional sibling context expansion (`get_neighbors`) recovering 3-step continuous context windows around matched steps.
+   - Procedural sequence assembly (`get_full_sequence`) sorting steps chronologically.
+3. **Artifacts & Documentation**:
+   - Verification script: [`scripts/verify_phase6.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/scripts/verify_phase6.py)
+   - Technical report: [`docs/verify_phase6.md`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/docs/verify_phase6.md)
+
+### Files Created / Modified:
+- [`backend/retrieval/tests/test_graph_retrievers.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/retrieval/tests/test_graph_retrievers.py)
+- [`backend/retrieval/resource_lookup.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/retrieval/resource_lookup.py)
+- [`backend/retrieval/graph.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/retrieval/graph.py)
+- [`backend/agent/tools.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/agent/tools.py)
+- [`scripts/verify_phase6.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/scripts/verify_phase6.py)
+- [`docs/verify_phase6.md`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/docs/verify_phase6.md)
+- [`task.md`](file:///Users/ompatil/.gemini/antigravity/brain/cea862d8-1935-4a4f-bf03-616578012a47/task.md)
+
+---
+
+## Step 68: Integrated Generalized Entity Graph & GitHub Developer Intelligence into LangGraph
+- **Date:** 2026-09-22
+- **Time:** 14:00 IST
+- **Purpose:** Completed end-to-end integration of the Generalized Entity Graph Layer (`EntityGraphRetriever`) across the LangGraph state machine, native LangChain 5-tool registry, system prompts, unit tests (25/25 retrieval tests, 13/13 agent tests passing), and end-to-end verification script.
+
+### Key Architecture & Implementation Details:
+1. **Generalized Property Graph Primitives (`backend/retrieval/entity_graph.py`)**:
+   - `get_entity`: Direct lookup of any entity by ID, alias, or suffix.
+   - `get_neighbors`: Multi-hop BFS relationship expansion across `in`, `out`, or `both` directions with edge-type and node-label filters.
+   - `search_nodes`: Search entities by label, property filters, and text query.
+   - `find_path`: Shortest path discovery between any two entities in the knowledge graph.
+   - `raw_cypher`: Parameterized read-only Cypher query execution against Neo4j.
+2. **Domain Developer Intelligence Shortcuts**:
+   - `get_pr_details`: Full PR metadata, author, approved reviewers, assignees, modified files, closed issues.
+   - `get_user_activity`: Developer 360 overview (authored PRs, commits, reviews, assigned issues).
+   - `get_file_contributors`: Code ownership, commit history, and PRs touching a file.
+   - `get_commit_details`: Commit author, message, touched files, parent PR merge links.
+   - `get_issue_details`: Issue state, reporter, assignees, labels, and closing PRs.
+   - `get_labeled_items`: Issues and PRs tagged with specific labels/topics.
+   - `get_team_overview`: Team members and accessible repositories.
+   - `get_repo_overview`: Repository summary, maintainers, open PRs, and issues.
+3. **Evidence Chunk Transformation (`EntityGraphRetriever.retrieve` & `format_as_chunk`)**:
+   - Automatically converts raw entity/graph outputs into citation-ready evidence chunks with metadata preservation for `ContextBuilder` and `AnswerGenerator`.
+4. **LangGraph State Machine & Tool Registry (`backend/agent/tools.py` & `backend/agent/langchain_tools.py`)**:
+   - Registered `github_entity_search` with full Pydantic schema validation across 12 operations.
+   - Extended `_tool_node` in `LangGraphAgentPlanner` and `AgentPlanner` to accumulate structured entity graph dictionaries into `retrieved_chunks`.
+5. **System Prompt Updates (`backend/agent/langgraph_planner.py` & `backend/agent/planner.py`)**:
+   - Added clear tool selection boundaries and trigger rules for `github_entity_search`.
+6. **Testing & Verification**:
+   - `backend/retrieval/tests/test_entity_graph.py`: 12/12 passed.
+   - `backend/agent/tests/test_langgraph_agent.py`: 10/10 passed (asserting 5 tools and LangGraph multi-hop loop).
+   - Verification script: [`scripts/verify_entity_graph.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/scripts/verify_entity_graph.py) executed with exit code 0.
+   - Technical report: [`docs/verify_entity_graph.md`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/docs/verify_entity_graph.md).
+
+### Files Created / Modified:
+- [`backend/retrieval/entity_graph.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/retrieval/entity_graph.py)
+- [`backend/agent/tools.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/agent/tools.py)
+- [`backend/agent/langchain_tools.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/agent/langchain_tools.py)
+- [`backend/agent/langgraph_planner.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/agent/langgraph_planner.py)
+- [`backend/agent/planner.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/agent/planner.py)
+- [`backend/retrieval/tests/test_entity_graph.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/retrieval/tests/test_entity_graph.py)
+- [`backend/agent/tests/test_langgraph_agent.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/agent/tests/test_langgraph_agent.py)
+- [`scripts/verify_entity_graph.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/scripts/verify_entity_graph.py)
+- [`docs/verify_entity_graph.md`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/docs/verify_entity_graph.md)
+- [`claude.md`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/claude.md)
+
+
+
+
+
+
+
+
 
 
 

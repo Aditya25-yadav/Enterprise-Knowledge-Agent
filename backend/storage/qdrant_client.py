@@ -88,27 +88,29 @@ class QdrantVectorStore:
                 ),
             )
 
-            # Create payload indexes on core search and RBAC fields
-            index_fields = [
-                ("is_public", rest.PayloadSchemaType.KEYWORD),
-                ("allowed_roles", rest.PayloadSchemaType.KEYWORD),
-                ("allowed_users", rest.PayloadSchemaType.KEYWORD),
-                ("allowed_groups", rest.PayloadSchemaType.KEYWORD),
-                ("source", rest.PayloadSchemaType.KEYWORD),
-                ("resource_type", rest.PayloadSchemaType.KEYWORD),
-                ("resource_id", rest.PayloadSchemaType.KEYWORD),
-                ("content_type", rest.PayloadSchemaType.KEYWORD),
-            ]
+            # Create payload indexes on core search and RBAC fields (only required in server mode)
+            if self.mode == "server":
+                index_fields = [
+                    ("is_public", rest.PayloadSchemaType.KEYWORD),
+                    ("allowed_roles", rest.PayloadSchemaType.KEYWORD),
+                    ("allowed_users", rest.PayloadSchemaType.KEYWORD),
+                    ("allowed_groups", rest.PayloadSchemaType.KEYWORD),
+                    ("source", rest.PayloadSchemaType.KEYWORD),
+                    ("resource_type", rest.PayloadSchemaType.KEYWORD),
+                    ("resource_id", rest.PayloadSchemaType.KEYWORD),
+                    ("content_type", rest.PayloadSchemaType.KEYWORD),
+                ]
 
-            for field_name, field_type in index_fields:
-                try:
-                    self._client.create_payload_index(
-                        collection_name=col_name,
-                        field_name=field_name,
-                        field_schema=field_type,
-                    )
-                except Exception:
-                    pass
+                for field_name, field_type in index_fields:
+                    try:
+                        self._client.create_payload_index(
+                            collection_name=col_name,
+                            field_name=field_name,
+                            field_schema=field_type,
+                        )
+                    except Exception:
+                        pass
+
 
     # ── Upsert Operations ────────────────────────────────────────────────────
 

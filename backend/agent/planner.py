@@ -57,15 +57,31 @@ class AgentPlanner:
     """
 
     SYSTEM_INSTRUCTION = """You are an Enterprise Knowledge Agent.
-You have access to specialized enterprise retrieval tools to find documentation, architecture guides, code repositories, setup procedures, issues, and communications across GitHub, Notion, Gmail, and Dropbox.
+You have access to specialized enterprise retrieval tools to find documentation, architecture guides, code repositories, setup procedures, issues, and communications across GitHub, Notion, Gmail, Dropbox, Jira and Confluence.
 
 Guidelines for Tool Selection:
 1. `semantic_search`: Use for natural language questions, conceptual understanding, high-level architecture explanations, setup procedures, runbooks, and policy guidelines.
 2. `keyword_search`: Use for exact technical identifiers, Jira issue keys (e.g. 'PAY-928'), GitHub PR numbers (e.g. '#1842'), HTTP/system error codes (e.g. 'HTTP 401', 'ECONNREFUSED'), code symbols/classes (e.g. 'AuthService.charge'), or exact filenames.
-3. Multi-Tool Planning: If a query references both concepts and exact identifiers (e.g. "What is PAY-928 and how does our Checkout workflow work?"), you may invoke both `keyword_search` and `semantic_search` in the same turn.
-4. If initial search results are empty or lack specific details, refine your query and search again.
-5. Once sufficient evidence is gathered, formulate a clear, professional, and well-structured answer.
-6. Always cite specific evidence when stating facts or steps using bracketed references (e.g. [1], [2]).
+3. `resource_lookup`: Use when you already know or discover a specific canonical URI (e.g. 'github://repo/owner/name', 'notion://vault/master', 'jira://issue/PAY-928', 'https://github.com/...'), direct URL, chunk ID, or exact document title, or when you need the complete stitched document content.
+4. `graph_traversal`: Use to explore structural document hierarchies:
+   - 'get_children': Find all child documents, repository files, sub-issues, or sub-pages under a known parent container.
+   - 'get_neighbors': Expand preceding and succeeding sibling chunks around a matched step or section.
+   - 'get_full_sequence': Assemble an entire ordered multi-step sequence, runbook, or workflow by its sequence ID.
+5. `github_entity_search`: Use for developer relationships, code intelligence, and GitHub entities:
+   - 'get_pr_details': Find PR author, reviewers, assignees, modified files, and closed issues.
+   - 'get_user_activity': Find PRs authored, commits, reviews, and assigned issues for a developer.
+   - 'get_file_contributors': Find commit authors, history, and PRs touching a specific file.
+   - 'get_commit_details': Find commit author, message, touched files, and parent PR.
+   - 'get_issue_details': Find issue reporter, assignees, labels, and closing PRs.
+   - 'get_labeled_items': Find PRs and issues tagged with a specific label.
+   - 'get_team_overview': Find team members and accessible repositories.
+   - 'get_neighbors' / 'find_path': Generalized multi-hop entity traversal and relationship path finding.
+6. Multi-Tool & Multi-Hop Planning:
+   - Single-Turn Parallel: If a query combines concepts, identifiers, or developer questions, you may invoke multiple tools in the same turn.
+   - Multi-Turn Multi-Hop: If initial search results identify a key PR, commit, or document, make follow-up calls in subsequent turns with `github_entity_search`, `resource_lookup`, or `graph_traversal`.
+7. If initial search results are empty or lack specific details, refine your query or traverse adjacent graph nodes.
+8. Once sufficient evidence is gathered, formulate a clear, professional, and well-structured answer.
+9. Always cite specific evidence when stating facts or steps using bracketed references (e.g. [1], [2]).
 """
 
 
@@ -145,12 +161,27 @@ Guidelines for Tool Selection:
                         "results_count": len(tool_output) if isinstance(tool_output, list) else 1,
                     })
 
-                    # Accumulate retrieved chunks if output is list of chunk dicts
+                    # Accumulate retrieved chunks if output is list of chunk dicts or single entity dict
                     if isinstance(tool_output, list):
-                        for c in tool_output:
-                            if isinstance(c, dict) and "chunk_id" in c:
-                                if not any(existing.get("chunk_id") == c.get("chunk_id") for existing in accumulated_chunks):
-                                    accumulated_chunks.append(c)
+                        for idx, c in enumerate(tool_output):
+                            if isinstance(c, dict):
+                                chunk_item = dict(c)
+                                if "chunk_id" not in chunk_item:
+                                    chunk_item["chunk_id"] = chunk_item.get("node_id") or f"{tc.tool_name}:{tc.call_id or ''}:{idx}"
+                                chunk_item.setdefault("title", chunk_item.get("name") or chunk_item.get("title") or f"Result from {tc.tool_name}")
+                                chunk_item.setdefault("source", "github" if "github" in tc.tool_name else "graph")
+                                chunk_item.setdefault("text", json.dumps(chunk_item, ensure_ascii=False, indent=2))
+                                if not any(existing.get("chunk_id") == chunk_item.get("chunk_id") for existing in accumulated_chunks):
+                                    accumulated_chunks.append(chunk_item)
+                    elif isinstance(tool_output, dict) and not tool_output.get("error"):
+                        chunk_item = dict(tool_output)
+                        if "chunk_id" not in chunk_item:
+                            chunk_item["chunk_id"] = chunk_item.get("node_id") or f"{tc.tool_name}:{tc.call_id or ''}"
+                        chunk_item.setdefault("title", chunk_item.get("title") or chunk_item.get("name") or chunk_item.get("repository") or f"Result from {tc.tool_name}")
+                        chunk_item.setdefault("source", "github" if "github" in tc.tool_name else "graph")
+                        chunk_item.setdefault("text", json.dumps(chunk_item, ensure_ascii=False, indent=2))
+                        if not any(existing.get("chunk_id") == chunk_item.get("chunk_id") for existing in accumulated_chunks):
+                            accumulated_chunks.append(chunk_item)
 
                     # Append tool result to conversation history
                     output_str = json.dumps(tool_output, ensure_ascii=False) if not isinstance(tool_output, str) else tool_output
