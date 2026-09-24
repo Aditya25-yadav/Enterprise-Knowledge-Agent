@@ -1857,3 +1857,107 @@ This document maintains a chronological record of all architectural decisions, c
 - [`scripts/verify_phase10.md`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/scripts/verify_phase10.md) (Created)
 - [`docs/phases.md`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/docs/phases.md) (Updated)
 - [`claude.md`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/claude.md) (Updated)
+
+---
+
+## Step 77: Created End-to-End Live Testing Harness & Local LLM Operator Guide
+- **Date:** 2026-09-24
+- **Time:** 21:52 IST
+- **Purpose:** Created a unified end-to-end live testing script ([`scripts/run_e2e_live.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/scripts/run_e2e_live.py)) and comprehensive step-by-step documentation ([`docs/e2e_local_llm_testing.md`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/docs/e2e_local_llm_testing.md)) for running and verifying the complete Enterprise Knowledge Agent stack using real local LLMs (Ollama / `qwen2.5` / `llama3.1`) across all 6 enterprise connectors.
+
+### Key Deliverables:
+1. **Unified Live Runner Script ([`scripts/run_e2e_live.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/scripts/run_e2e_live.py))**:
+   - Ingests multi-modal documents from GitHub, Jira, Notion, Dropbox, Gmail, and Confluence into OKF v0.2 concept bundles.
+   - Populates dense embeddings (Qdrant), sparse BM25+ index, and Developer Property Graph (InMemoryEntityGraph).
+   - Initializes `HybridRetriever` (RRF) and `CrossEncoderReranker`.
+   - Connects to local Ollama daemon (`qwen2.5:7b` / `llama3.1:8b`) via `OllamaProvider` (or Gemini via `GeminiProvider`).
+   - Executes 5 automated test cases covering cross-system bug tracing, API specifications, runbook SOPs, and strict RBAC isolation.
+   - Supports interactive terminal chat REPL mode (`--interactive`) with dynamic role-switching (`role ciso_admin`, `role guest`).
+2. **Comprehensive Developer Documentation ([`docs/e2e_local_llm_testing.md`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/docs/e2e_local_llm_testing.md))**:
+   - Complete guide to installing Ollama, pulling tool-calling models, configuring `.env` for connectors, and running live queries.
+   - Troubleshooting tips for local model tool calling, memory management, and context window limits.
+
+### Files Created / Modified:
+- [`scripts/run_e2e_live.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/scripts/run_e2e_live.py) (Created)
+- [`docs/e2e_local_llm_testing.md`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/docs/e2e_local_llm_testing.md) (Created)
+- [`claude.md`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/claude.md) (Updated)
+
+---
+
+## Step 78: Created End-to-End Google Gemini API Testing & Operator Guide
+- **Date:** 2026-09-24
+- **Time:** 21:58 IST
+- **Purpose:** Created comprehensive operator documentation ([`docs/e2e_gemini_api_testing.md`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/docs/e2e_gemini_api_testing.md)) detailing setup, API key management, environment configuration, automated verification, and interactive chat REPL workflows using Google Gemini API (`GeminiProvider` with `gemini-2.5-flash` / `gemini-2.5-pro`) over local vector/BM25/graph storage.
+
+### Key Deliverables:
+1. **Google Gemini Testing Guide ([`docs/e2e_gemini_api_testing.md`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/docs/e2e_gemini_api_testing.md))**:
+   - Detailed guide on obtaining and securing Gemini API keys from Google AI Studio.
+   - Configuration via `.env` or direct shell export (`GEMINI_API_KEY`, `GEMINI_MODEL=gemini-2.5-flash`).
+   - Instructions for running the automated live test suite across all 6 connectors with Gemini.
+   - Interactive chat REPL instructions with multi-role RBAC switching (`role ciso_admin`, `role guest`).
+   - Feature comparison table comparing local Ollama execution with cloud Gemini execution.
+   - Troubleshooting section for rate limits (429 errors), SDK installation, and key authentication.
+
+### Files Created / Modified:
+- [`docs/e2e_gemini_api_testing.md`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/docs/e2e_gemini_api_testing.md) (Created)
+- [`claude.md`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/claude.md) (Updated)
+
+---
+
+## Step 79: Configured Persistent Local Disk Storage & Re-indexing Flags in Live Testing Pipeline
+- **Date:** 2026-09-24
+- **Time:** 22:10 IST
+- **Purpose:** Upgraded [`scripts/run_e2e_live.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/scripts/run_e2e_live.py) to default to persistent local disk storage (`mode="local"`, `./data/qdrant_storage`), allowing vector payloads and BM25 index to persist across runs, with automated reuse detection and `--reset-storage` wipe options.
+- **Changes Made:**
+  1. Updated `setup_live_pipeline` in [`scripts/run_e2e_live.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/scripts/run_e2e_live.py) to accept `qdrant_mode="local"`, `qdrant_path="./data/qdrant_storage"`, `qdrant_url`, and `reset_storage`.
+  2. Implemented intelligent persistent cache detection: when existing indexed points are found on disk, re-embedding is skipped automatically unless `--reset-storage` is supplied.
+  3. Added CLI argument parsing in `main()` for `--qdrant-mode`, `--qdrant-path`, `--qdrant-url`, `--bm25-path`, and `--reset-storage`.
+  4. Updated [`docs/e2e_local_llm_testing.md`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/docs/e2e_local_llm_testing.md) and [`docs/e2e_gemini_api_testing.md`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/docs/e2e_gemini_api_testing.md) to document persistent storage modes, options, and performance benefits.
+  5. Cleaned up duplicate lines and imports in [`backend/ingestion/pipeline.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/ingestion/pipeline.py) and added safe optional import fallback for `neo4j` in [`backend/graph/neo4j_client.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/graph/neo4j_client.py).
+
+### Files Created / Modified:
+- [`scripts/run_e2e_live.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/scripts/run_e2e_live.py) (Modified)
+- [`backend/ingestion/pipeline.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/ingestion/pipeline.py) (Modified)
+- [`backend/graph/neo4j_client.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/graph/neo4j_client.py) (Modified)
+- [`docs/e2e_local_llm_testing.md`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/docs/e2e_local_llm_testing.md) (Modified)
+- [`docs/e2e_gemini_api_testing.md`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/docs/e2e_gemini_api_testing.md) (Modified)
+- [`claude.md`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/claude.md) (Updated)
+
+---
+
+## Step 80: Added First-Class Neo4j Live Database Connectivity & CLI Arguments in E2E Runner
+- **Date:** 2026-09-24
+- **Time:** 22:15 IST
+- **Purpose:** Integrated full Neo4j live database connectivity into [`scripts/run_e2e_live.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/scripts/run_e2e_live.py), allowing seamless switching between the zero-dependency `InMemoryEntityGraph` and a live standalone/clustered Neo4j instance.
+- **Changes Made:**
+  1. Added `setup_entity_graph()` in [`scripts/run_e2e_live.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/scripts/run_e2e_live.py) that detects `NEO4J_PASSWORD`, connects via [`Neo4jClient`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/graph/neo4j_client.py), creates schema constraints, and synchronizes developer nodes and relationship edges into Neo4j.
+  2. Implemented graceful fallback to `InMemoryEntityGraph` when Neo4j is offline or unconfigured.
+  3. Added CLI arguments to `main()`: `--neo4j-uri`, `--neo4j-user`, `--neo4j-password`, and `--neo4j-database`.
+  4. Updated startup status banners in [`scripts/run_e2e_live.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/scripts/run_e2e_live.py) to display active graph target (`Neo4j (bolt://...)` or `In-Memory Property Graph (RAM)`).
+  5. Updated operator testing guides [`docs/e2e_local_llm_testing.md`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/docs/e2e_local_llm_testing.md) and [`docs/e2e_gemini_api_testing.md`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/docs/e2e_gemini_api_testing.md) with Neo4j CLI parameters and configuration notes.
+
+### Files Created / Modified:
+- [`scripts/run_e2e_live.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/scripts/run_e2e_live.py) (Modified)
+- [`docs/e2e_local_llm_testing.md`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/docs/e2e_local_llm_testing.md) (Modified)
+- [`docs/e2e_gemini_api_testing.md`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/docs/e2e_gemini_api_testing.md) (Modified)
+- [`claude.md`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/claude.md) (Updated)
+
+---
+
+## Step 81: Added Detailed Step-by-Step Neo4j Setup & Credentials Instructions to Documentation
+- **Date:** 2026-09-24
+- **Time:** 22:17 IST
+- **Purpose:** Added explicit step-by-step setup guides and credentials instructions in [`docs/e2e_local_llm_testing.md`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/docs/e2e_local_llm_testing.md) and [`docs/e2e_gemini_api_testing.md`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/docs/e2e_gemini_api_testing.md) covering In-Memory fallback (0 credentials), Local Docker (`docker run`), Neo4j AuraDB (cloud), and `.env` configuration.
+- **Changes Made:**
+  1. Added Neo4j environment variable definitions (`NEO4J_URI`, `NEO4J_USERNAME`, `NEO4J_PASSWORD`, `NEO4J_DATABASE`) to `.env` example blocks in both guides.
+  2. Added dedicated "Step-by-Step Neo4j Setup Options" sections with exact `docker run` commands and Neo4j Aura cloud console instructions.
+
+### Files Created / Modified:
+- [`docs/e2e_local_llm_testing.md`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/docs/e2e_local_llm_testing.md) (Modified)
+- [`docs/e2e_gemini_api_testing.md`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/docs/e2e_gemini_api_testing.md) (Modified)
+- [`claude.md`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/claude.md) (Updated)
+
+
+
+
+
