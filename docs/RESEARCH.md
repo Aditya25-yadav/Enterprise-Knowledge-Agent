@@ -2368,7 +2368,7 @@ that encodes the wiki hierarchy.
 1. **Space-level metadata** — space key/name define the knowledge domain boundary.
 2. **Page-level metadata** — title, space key, ancestor page IDs (hierarchy), version number,
    created/last-edited timestamps, creator/editor.
-3. **Content structure** — the Storage-Format XHTML is *not* plain text: headings, paragraphs,
+3. **Content structure** — the Storage-Format XHTML is _not_ plain text: headings, paragraphs,
    bullet/numbered lists (with nesting), tables (→ structured DATABASE records), code blocks,
    blockquotes, and dividers must be preserved as semantic blocks.
 
@@ -2383,13 +2383,16 @@ ignored via an explicit ignore-list; `ac:structured-macro` panels flatten to the
 ## Confluence connector processing layers
 
 ### 1. Page-level information
+
 Title, space key, parent page, timestamps, version, and URL drive indexing and recency scoring.
 
 ### 2. Content-level information
+
 Storage XHTML → semantic `ContentBlock`s: headings, paragraphs, lists with nested children,
 code blocks, quotes, and tables mapped to `DATABASE` blocks so tabular knowledge is retrievable.
 
 ### 3. Preserve source information
+
 Every block carries the page ID, so downstream chunkers can cite `confluence://pages/{id}`.
 
 ## Why separate fetch from normalization (again)
@@ -2439,6 +2442,7 @@ structurally.
 ## ADF: parsing JSON, not HTML
 
 ADF nodes are recursive `{type, attrs, content}` objects. We walk the tree depth-first:
+
 - `text` inline nodes fold into concatenated strings; marks apply formatting that is
   discarded for retrieval but preserved in Markdown where trivial.
 - `bulletList`/`orderedList`/`listItem` map to nested content blocks.
@@ -2449,13 +2453,16 @@ ADF nodes are recursive `{type, attrs, content}` objects. We walk the tree depth
 ## Jira connector processing layers
 
 ### 1. Project-level information
+
 Key + name establish the record; a lightweight project overview doc is generated on request.
 
 ### 2. Issue-level information
+
 Summary, status, assignee, labels, and the full parsed ADF description become a document
 whose body carries retrievable operational detail.
 
 ### 3. Preserve source information
+
 Every block is traceable to the issue key and `jira://issues/{key}` for citations.
 
 ## Why separate fetch from normalization (again)
@@ -2472,8 +2479,8 @@ re-process an issue only when `updated > last_synced_time`.
 
 1. `JIRA_URL` must point to the **actual Jira site the API token was issued for**
    (e.g. `https://your-org.atlassian.net`). Setting it to the generic account portal
-   `https://home.atlassian.com` is a silent killer: that host answers with the *Atlassian
-   Home* HTML page at HTTP 200, so `test_connection()` passes while every `response.json()`
+   `https://home.atlassian.com` is a silent killer: that host answers with the _Atlassian
+   Home_ HTML page at HTTP 200, so `test_connection()` passes while every `response.json()`
    call throws `Expecting value: line 1 column 1`.
 2. `JIRA_USERNAME` must be the exact account e-mail linked to the API token, not an
    employee ID or display name.

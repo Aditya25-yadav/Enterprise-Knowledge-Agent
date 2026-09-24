@@ -110,6 +110,7 @@ class OKFConcept:
     # Enterprise Extensions
     permissions: OKFPermissions = field(default_factory=OKFPermissions)
     content_hash: str = ""                       # SHA-256 hash of content
+    extra_metadata: Dict[str, Any] = field(default_factory=dict) # Platform-specific tags/details
 
     # Markdown Body (§4.2)
     body: str = ""                               # Structural Markdown content
@@ -207,6 +208,11 @@ class OKFConcept:
             if self.permissions.allowed_users:
                 lines.append(f"  allowed_users: {json.dumps(self.permissions.allowed_users)}")
 
+        if self.extra_metadata:
+            lines.append("extra_metadata:")
+            for k, v in sorted(self.extra_metadata.items()):
+                lines.append(f"  {k}: {json.dumps(v, ensure_ascii=False)}")
+
         if self.content_hash:
             lines.append(f"content_hash: {self.content_hash}")
 
@@ -241,6 +247,7 @@ class OKFConcept:
             "verified": [v.to_dict() for v in self.verified],
             "sources": [s.to_dict() for s in self.sources],
             "permissions": self.permissions.to_dict(),
+            "extra_metadata": self.extra_metadata,
             "content_hash": self.content_hash,
             "body": self.body,
             "structured_data": self.structured_data,
@@ -308,6 +315,9 @@ class OKFConcept:
         if doc.metadata.source_platform and doc.metadata.source_platform not in inferred_tags:
             inferred_tags.append(doc.metadata.source_platform)
 
+        # Carry forward connector-specific metadata
+        extra_metadata = dict(doc.metadata.extra) if doc.metadata.extra else {}
+
         return cls(
             type=concept_type,
             title=doc.metadata.title or "Untitled",
@@ -321,6 +331,7 @@ class OKFConcept:
             status="stable",
             sources=[source_entry],
             permissions=permissions or OKFPermissions(),
+            extra_metadata=extra_metadata,
             content_hash=content_hash,
             body=body_markdown,
             structured_data=structured_data,
