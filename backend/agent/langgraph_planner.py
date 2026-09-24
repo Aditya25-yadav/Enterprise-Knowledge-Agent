@@ -95,7 +95,7 @@ def _to_internal_messages(langchain_msgs: List[BaseMessage]) -> List[Message]:
                 )
             )
         elif isinstance(m, SystemMessage):
-            result.append(Message(role=MessageRole.USER, content=f"[System]: {m.content}"))
+            result.append(Message(role=MessageRole.SYSTEM, content=str(m.content)))
     return result
 
 
@@ -111,7 +111,7 @@ Guidelines for Tool Selection:
 1. `hybrid_search`: Preferred general search tool. Combines dense vector semantics, BM25+ keywords, and graph entities via Reciprocal Rank Fusion (RRF). Use for queries containing both high-level concepts and exact technical tokens.
 2. `semantic_search`: Use for natural language questions, conceptual understanding, high-level architecture explanations, setup procedures, runbooks, and policy guidelines.
 3. `keyword_search`: Use for exact technical identifiers, Jira issue keys (e.g. 'PAY-928'), GitHub PR numbers (e.g. '#1842'), HTTP/system error codes (e.g. 'HTTP 401', 'ECONNREFUSED'), code symbols/classes (e.g. 'AuthService.charge'), or exact filenames.
-4. `resource_lookup`: Use when you already know or discover a specific canonical URI (e.g. 'github://repo/owner/name', 'notion://vault/master', 'jira://issue/PAY-928', 'https://github.com/...'), direct URL, chunk ID, or exact document title, or when you need the complete stitched document content.
+4. `resource_lookup`: Use to retrieve full documents, runbooks, SOPs, specifications, or policies by document title, topic name (e.g. 'Disaster Recovery Runbook', 'Payments API Specification'), canonical URI (e.g. 'github://repo/owner/name', 'notion://vault/master', 'jira://issue/PAY-928', 'https://github.com/...'), direct URL, or chunk ID. Reconstructs multi-chunk documents in sequential reading order.
 5. `graph_traversal`: Use to explore structural document hierarchies:
    - 'get_children': Find all child documents, repository files, sub-issues, or sub-pages under a known parent container.
    - 'get_neighbors': Expand preceding and succeeding sibling chunks around a matched step or section.
@@ -162,6 +162,14 @@ Guidelines for Tool Selection:
 
     # ── Graph Node Implementations ───────────────────────────────────────────
 
+    REASONER_SYSTEM_PROMPT = (
+        "You are an Enterprise Knowledge Assistant capable of searching internal systems "
+        "(GitHub, Jira, Confluence, Notion, Dropbox, Gmail). Always select and execute the most "
+        "relevant retrieval tool (hybrid_search, semantic_search, keyword_search, resource_lookup, "
+        "graph_traversal, github_entity_search) to locate internal enterprise documents. "
+        "Never fabricate outside sources."
+    )
+
     def _reasoner_node(self, state: AgentState) -> Dict[str, Any]:
         """
         LLM Reasoner Step: Analyzes conversation state, reflection feedback, and available tools,
@@ -170,6 +178,9 @@ Guidelines for Tool Selection:
         turn_count = state.get("turn_count", 0) + 1
         tools = self.tool_registry.get_definitions()
         internal_messages = _to_internal_messages(state.get("messages", []))
+
+        if not internal_messages or internal_messages[0].role != MessageRole.SYSTEM:
+            internal_messages.insert(0, Message(role=MessageRole.SYSTEM, content=self.REASONER_SYSTEM_PROMPT))
 
         # Invoke LLM with available tools
         response: LLMResponse = self.llm_provider.generate_with_tools(
@@ -362,7 +373,7 @@ Guidelines for Tool Selection:
         _, citations = ContextBuilder.build_context(chunks)
 
         answer = state.get("answer")
-        if not answer:
+        if chunks or not answer:
             gen_res = self.answer_generator.generate_answer(
                 query=state["query"],
                 chunks=chunks,

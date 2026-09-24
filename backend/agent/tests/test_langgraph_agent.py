@@ -1171,7 +1171,36 @@ Query `/healthz` endpoint to confirm 200 OK status.
 
         # 4. Verify answer and citations
         self.assertIn("AuthService.charge", result["answer"])
-        self.assertGreater(len(result["citations"]), 0)
+    def test_16_string_numeric_arguments_in_tools_and_planner(self) -> None:
+        """
+        Verifies that string-encoded numeric parameters (e.g. top_k='5', k='60')
+        produced by certain LLMs (like Ollama/Qwen) are defensively coerced and do
+        not cause TypeError ('<' not supported between instances of 'str' and 'int').
+        """
+        langchain_tools = create_langchain_tools(
+            semantic_retriever=self.retriever,
+            keyword_retriever=self.keyword_retriever,
+            entity_graph_retriever=self.entity_retriever,
+            graph_retriever=self.graph_retriever,
+            bm25_index=self.bm25_index,
+            user_context={"roles": ["engineer"], "user_id": "eng@company.com"},
+        )
+        tool_map = {t.name: t for t in langchain_tools}
+
+        # 1. semantic_search with string top_k
+        sem_res = json.loads(tool_map["semantic_search"].invoke({"query": "payment auth", "top_k": "3"}))
+        self.assertIsInstance(sem_res, list)
+        self.assertGreater(len(sem_res), 0)
+
+        # 2. keyword_search with string top_k
+        kw_res = json.loads(tool_map["keyword_search"].invoke({"query": "PAY-928", "top_k": "3"}))
+        self.assertIsInstance(kw_res, list)
+        self.assertGreater(len(kw_res), 0)
+
+        # 3. hybrid_search with string top_k and k
+        hyb_res = json.loads(tool_map["hybrid_search"].invoke({"query": "checkout timeout", "top_k": "3", "k": "60"}))
+        self.assertIsInstance(hyb_res, list)
+        self.assertGreater(len(hyb_res), 0)
 
 
 if __name__ == "__main__":

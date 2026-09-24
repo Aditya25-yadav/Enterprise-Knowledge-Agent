@@ -44,6 +44,10 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+# Load .env file automatically
+from dotenv import load_dotenv
+load_dotenv(dotenv_path=PROJECT_ROOT / ".env")
+
 # Force offline embedding models if cached locally
 os.environ.setdefault("HF_HUB_OFFLINE", "1")
 os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
@@ -280,11 +284,23 @@ def setup_entity_graph(
             client = Neo4jClient(uri=uri, user=user, password=pwd, database=db)
             if client.test_connection():
                 neo4j_client = client
+                try:
+                    client.create_constraints()
+                    client.create_indexes()
+                except Exception:
+                    pass
                 # Write nodes and relationships to live Neo4j
                 with client.driver.session(database=client.database) as session:
                     client._write_nodes(session, nodes)
                     client._write_relationships(session, relationships)
                 print(f"       ✓ Connected to live Neo4j database ({uri}) and synced {len(nodes)} entities & {len(relationships)} relations.")
+            else:
+                err_msg = client.last_error or "Connection / Routing Failure"
+                print(f"       ⚠️ Neo4j connection to {uri} failed: {err_msg}")
+                if "routing" in err_msg.lower() or "serviceunavailable" in err_msg.lower():
+                    print("          👉 Hint: If using Neo4j AuraDB (Cloud), check that your instance is RUNNING (not PAUSED) in https://console.neo4j.io")
+                elif "unauthorized" in err_msg.lower() or "autherror" in err_msg.lower() or "authentication" in err_msg.lower():
+                    print("          👉 Hint: Check your NEO4J_USERNAME and NEO4J_PASSWORD in .env")
         except Exception as e:
             print(f"       ⚠️ Neo4j connection attempt to {uri} failed ({e}); falling back to in-memory graph.")
             neo4j_client = None
@@ -298,7 +314,8 @@ def setup_entity_graph(
 
     if not neo4j_client:
         print(f"       ✓ Populated Developer Property Graph in-memory ({len(nodes)} nodes, {len(relationships)} edges).")
-        print(f"         (To connect to live Neo4j: set NEO4J_PASSWORD in .env or pass --neo4j-password)")
+        if not pwd:
+            print("         (To connect to live Neo4j: set NEO4J_PASSWORD in .env or pass --neo4j-password)")
 
     return EntityGraphRetriever(neo4j_client=neo4j_client, memory_graph=memory_graph)
 
@@ -317,6 +334,7 @@ def setup_live_pipeline(
     neo4j_database: Optional[str] = None,
     llm_provider_name: str = "ollama",
     llm_model: Optional[str] = None,
+    max_turns: int = 5,
 ) -> tuple[LangGraphAgentPlanner, HybridRetriever]:
     """
     Initializes and wires the complete end-to-end Enterprise Knowledge pipeline:
@@ -401,12 +419,25 @@ def setup_live_pipeline(
         resource_lookup_retriever=resource_retriever,
     )
 
-    print(f"🤖 [4/4] Connecting to Local LLM Provider: {llm_provider_name.upper()}...")
+    print(f"🤖 [5/5] Connecting to LLM Provider: {llm_provider_name.upper()}...")
     if llm_model:
         if llm_provider_name == "ollama":
             os.environ["OLLAMA_MODEL"] = llm_model
         elif llm_provider_name == "gemini":
             os.environ["GEMINI_MODEL"] = llm_model
+
+    if llm_provider_name == "ollama":
+        base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+        try:
+            import urllib.request
+            req = urllib.request.Request(f"{base_url}/api/tags", method="GET")
+            with urllib.request.urlopen(req, timeout=2):
+                pass
+            print(f"       ✓ Connected to Ollama server at {base_url} (Model: {llm_model or os.getenv('OLLAMA_MODEL', 'llama3.1')})")
+        except Exception:
+            print(f"\n⚠️  WARNING: Ollama server is NOT running or unreachable at {base_url}!")
+            print(f"   • Start Ollama: Open a new terminal tab and run `ollama serve`")
+            print(f"   • Or use Google Gemini: Pass `--provider gemini` (needs GEMINI_API_KEY)\n")
 
     llm_provider = get_llm_provider(llm_provider_name)
     reranker = CrossEncoderReranker()
@@ -416,7 +447,8 @@ def setup_live_pipeline(
         tool_registry=tool_registry,
         reranker=reranker,
         enable_reranking=True,
-        max_turns=4,
+        max_turns=max_turns,
+        max_retrieval_attempts=3,
     )
 
     return planner, hybrid_retriever
@@ -477,7 +509,8 @@ def run_automated_live_tests(planner: LangGraphAgentPlanner) -> None:
         print(f"  📑 Chunks Retrieved: {len(result['retrieved_chunks'])} | Reranked: {result['rerank_applied']}")
         print(f"  🏷️ Citations Generated ({len(result['citations'])}):")
         for cit in result["citations"]:
-            print(f"     [{cit.get('id')}] {cit.get('title')} ({cit.get('source')}) -> {cit.get('url')}")
+            cit_idx = cit.get('citation_index') or cit.get('index') or cit.get('id') or 1
+            print(f"     [{cit_idx}] {cit.get('title')} ({cit.get('source')}) -> {cit.get('url')}")
 
         print(f"\n  💬 Agent Answer:\n{result['answer']}\n")
 
@@ -523,26 +556,49 @@ def run_interactive_repl(planner: LangGraphAgentPlanner) -> None:
 
             if user_input.lower().startswith("role "):
                 current_role = user_input.split(" ", 1)[1].strip()
-                print(f"Switched active security role to: '{current_role}'")
+                if current_role in ("guest", "anonymous", "external", "contractor"):
+                    current_user = f"{current_role}@external.com"
+                else:
+                    current_user = f"{current_role}@company.com"
+                print(f"Switched active security role to: '{current_role}' (User: {current_user})")
                 continue
 
-            print("\n🤖 Reasoning and retrieving multi-modal evidence across connectors...")
-            t0 = time.time()
-            result = planner.run(
-                query=user_input,
-                user_context={"roles": [current_role, "employee"], "user_id": current_user},
-            )
-            elapsed = time.time() - t0
+            try:
+                print("\n🤖 Reasoning and retrieving multi-modal evidence across connectors...")
+                t0 = time.time()
+                result = planner.run(
+                    query=user_input,
+                    user_context={"roles": [current_role], "user_id": current_user},
+                )
+                elapsed = time.time() - t0
 
-            print(f"\n{'─' * 80}")
-            print(f"Answer ({elapsed:.2f}s | {len(result['tool_calls'])} tool calls):")
-            print(result["answer"])
-            print(f"{'─' * 80}")
+                print(f"\n{'─' * 80}")
+                print(f"⏱️  Execution Time: {elapsed:.2f}s | Turns: {result.get('turns', 1)}")
+                if result.get("tool_calls"):
+                    print(f"🛠️  Tools Called ({len(result['tool_calls'])}):")
+                    for tc in result["tool_calls"]:
+                        args_str = json.dumps(tc.get("arguments", tc.get("args", {})), ensure_ascii=False)
+                        print(f"   • {tc.get('tool')}({args_str})")
+                else:
+                    print(f"🛠️  Tools Called: None (direct reasoning)")
+                print(f"📑 Chunks Retrieved: {len(result.get('retrieved_chunks', []))} | Reranked: {result.get('rerank_applied', False)}")
 
-            if result["citations"]:
-                print("Citations:")
-                for cit in result["citations"]:
-                    print(f"  [{cit.get('id')}] {cit.get('title')} ({cit.get('source')})")
+                print(f"\n💬 Answer:")
+                print(result["answer"])
+                print(f"{'─' * 80}")
+
+                if result.get("citations"):
+                    print("🏷️  Citations:")
+                    for cit in result["citations"]:
+                        cit_idx = cit.get('citation_index') or cit.get('index') or cit.get('id') or 1
+                        url_str = f" -> {cit.get('url')}" if cit.get('url') else ""
+                        print(f"   [{cit_idx}] {cit.get('title')} ({cit.get('source')}){url_str}")
+            except Exception as query_err:
+                err_str = str(query_err)
+                print(f"\n❌ Error processing query: {err_str}")
+                if "Failed to connect to Ollama" in err_str or "Connection refused" in err_str:
+                    print("   👉 Fix: Start Ollama in a separate terminal: `ollama serve`")
+                    print("   👉 Or restart this script with Google Gemini: `--provider gemini`")
 
         except (KeyboardInterrupt, EOFError):
             print("\nExiting interactive REPL.")
@@ -552,7 +608,7 @@ def run_interactive_repl(planner: LangGraphAgentPlanner) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Live End-to-End Testing for Enterprise Knowledge Agent")
     parser.add_argument("--provider", default="ollama", choices=["ollama", "gemini"], help="LLM Provider (default: ollama)")
-    parser.add_argument("--model", default="qwen2.5:7b", help="Model name (e.g. qwen2.5:7b, llama3.1:8b, gemini-2.5-flash)")
+    parser.add_argument("--model", default="llama3.1:8b", help="Model name (e.g. qwen2.5:7b, llama3.1:8b, gemini-2.5-flash)")
     parser.add_argument("--qdrant-mode", default="local", choices=["local", "memory", "server"], help="Qdrant storage mode (default: local)")
     parser.add_argument("--qdrant-path", default="./data/qdrant_storage", help="Local disk storage path for Qdrant (default: ./data/qdrant_storage)")
     parser.add_argument("--qdrant-url", default=None, help="Remote Qdrant server URL for server mode (e.g. http://localhost:6333)")
@@ -562,6 +618,7 @@ def main() -> None:
     parser.add_argument("--neo4j-user", default=os.getenv("NEO4J_USERNAME", "neo4j"), help="Neo4j username (default: neo4j)")
     parser.add_argument("--neo4j-password", default=os.getenv("NEO4J_PASSWORD", None), help="Neo4j password (optional: falls back to in-memory graph)")
     parser.add_argument("--neo4j-database", default=os.getenv("NEO4J_DATABASE", "neo4j"), help="Neo4j database name (default: neo4j)")
+    parser.add_argument("--max-turns", type=int, default=6, help="Maximum agent reflection turns (default: 5)")
     parser.add_argument("--interactive", action="store_true", help="Launch interactive REPL mode after setup")
     args = parser.parse_args()
 
@@ -573,6 +630,7 @@ def main() -> None:
     print(f"   Provider: {args.provider.upper()} | Model: {args.model}")
     print(f"   Vectors:  Qdrant ({args.qdrant_mode.upper()}) @ {storage_target}")
     print(f"   Graph:    {graph_target}")
+    print(f"   Turns:    Max {args.max_turns} agent turns")
     print("=" * 80)
 
     try:
@@ -588,6 +646,7 @@ def main() -> None:
             neo4j_database=args.neo4j_database,
             llm_provider_name=args.provider,
             llm_model=args.model,
+            max_turns=args.max_turns,
         )
     except Exception as e:
         print(f"\n❌ Error initializing pipeline: {e}")

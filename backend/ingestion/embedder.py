@@ -35,7 +35,12 @@ class LocalEmbedder:
         """Lazy loads the SentenceTransformer model on first invocation."""
         if self._model is None:
             from sentence_transformers import SentenceTransformer
-            self._model = SentenceTransformer(self.model_name, device=self.device)
+            try:
+                # Attempt instant local cache load first
+                self._model = SentenceTransformer(self.model_name, device=self.device, local_files_only=True)
+            except Exception:
+                # Fall back to online download if not locally cached
+                self._model = SentenceTransformer(self.model_name, device=self.device)
         return self._model
 
     @property

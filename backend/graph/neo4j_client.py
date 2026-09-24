@@ -159,6 +159,7 @@ class Neo4jClient:
         self.user = user or os.getenv("NEO4J_USERNAME", "neo4j")
         self.password = password or os.getenv("NEO4J_PASSWORD", "")
         self.database = database or os.getenv("NEO4J_DATABASE", "neo4j")
+        self.last_error: Optional[str] = None
 
         if GraphDatabase is None:
             raise ImportError(
@@ -196,7 +197,8 @@ class Neo4jClient:
             with self.driver.session(database=self.database) as session:
                 result = session.run("RETURN 1 AS ok")
                 return result.single()["ok"] == 1
-        except (ServiceUnavailable, AuthError, Exception):
+        except Exception as e:
+            self.last_error = str(e)
             return False
 
     def get_server_info(self) -> Dict[str, Any]:

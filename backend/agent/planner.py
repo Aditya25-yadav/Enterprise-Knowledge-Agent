@@ -63,7 +63,7 @@ Guidelines for Tool Selection:
 1. `hybrid_search`: Preferred general search tool. Combines dense vector semantics, BM25+ keywords, and graph entities via Reciprocal Rank Fusion (RRF). Use for queries containing both high-level concepts and exact technical tokens.
 2. `semantic_search`: Use for natural language questions, conceptual understanding, high-level architecture explanations, setup procedures, runbooks, and policy guidelines.
 3. `keyword_search`: Use for exact technical identifiers, Jira issue keys (e.g. 'PAY-928'), GitHub PR numbers (e.g. '#1842'), HTTP/system error codes (e.g. 'HTTP 401', 'ECONNREFUSED'), code symbols/classes (e.g. 'AuthService.charge'), or exact filenames.
-4. `resource_lookup`: Use when you already know or discover a specific canonical URI (e.g. 'github://repo/owner/name', 'notion://vault/master', 'jira://issue/PAY-928', 'https://github.com/...'), direct URL, chunk ID, or exact document title, or when you need the complete stitched document content.
+4. `resource_lookup`: Use to retrieve full documents, runbooks, SOPs, specifications, or policies by document title, topic name (e.g. 'Disaster Recovery Runbook', 'Payments API Specification'), canonical URI (e.g. 'github://repo/owner/name', 'notion://vault/master', 'jira://issue/PAY-928', 'https://github.com/...'), direct URL, or chunk ID. Reconstructs multi-chunk documents in sequential reading order.
 5. `graph_traversal`: Use to explore structural document hierarchies:
    - 'get_children': Find all child documents, repository files, sub-issues, or sub-pages under a known parent container.
    - 'get_neighbors': Expand preceding and succeeding sibling chunks around a matched step or section.

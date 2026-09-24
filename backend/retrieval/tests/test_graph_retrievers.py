@@ -199,6 +199,34 @@ Rotation cycle: Every 90 days.
         self.assertGreater(len(results), 0)
         self.assertTrue(any("Drain Ingress Traffic" in r["text"] for r in results))
 
+    def test_03b_lookup_by_fuzzy_topic_and_token_overlap(self) -> None:
+        """Verifies lookup by approximate/fuzzy title and token-set overlap (e.g. 'disaster recovery module')."""
+        # 1. Look up disaster recovery module -> should match 'Disaster Recovery Runbook'
+        results = self.resource_retriever.lookup(
+            resource_id="disaster recovery module",
+            user_context={"roles": ["engineer"]},
+        )
+        self.assertGreater(len(results), 0)
+        self.assertEqual(results[0]["title"], "Disaster Recovery Runbook")
+        self.assertTrue(any("Drain Ingress Traffic" in r["text"] for r in results))
+
+        # 2. Look up payments api -> should match 'Payments API Specification'
+        api_results = self.resource_retriever.lookup(
+            resource_id="payments api",
+            user_context={"roles": ["engineer"]},
+        )
+        self.assertGreater(len(api_results), 0)
+        self.assertEqual(api_results[0]["title"], "Payments API Specification")
+
+    def test_03c_lookup_by_url_slug_and_filename(self) -> None:
+        """Verifies lookup by URL path slug or file name (e.g. 'api.md' or 'dr-runbook')."""
+        results = self.resource_retriever.lookup(
+            resource_id="dr-runbook",
+            user_context={"roles": ["engineer"]},
+        )
+        self.assertGreater(len(results), 0)
+        self.assertEqual(results[0]["title"], "Disaster Recovery Runbook")
+
     def test_04_get_document_sequential_stitching(self) -> None:
         """Verifies multi-chunk document assembly, completeness, and sequential ordering."""
         doc = self.resource_retriever.get_document(
