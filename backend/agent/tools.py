@@ -59,12 +59,21 @@ class ToolRegistry:
             }
 
         handler = self._handlers[tool_name]
-        try:
-            # Pass user_context if the handler accepts it
-            return handler(arguments=arguments, user_context=user_context or {})
-        except TypeError:
-            # Fallback if handler only takes arguments
-            return handler(**arguments)
+        user_ctx = user_context or {}
+        
+        import inspect
+        sig = inspect.signature(handler)
+        params = sig.parameters
+
+        if "arguments" in params and "user_context" in params:
+            return handler(arguments=arguments, user_context=user_ctx)
+        elif "arguments" in params:
+            return handler(arguments=arguments)
+        else:
+            call_kwargs = dict(arguments)
+            if "user_context" in params:
+                call_kwargs["user_context"] = user_ctx
+            return handler(**call_kwargs)
 
 
 def create_default_tool_registry(
@@ -115,9 +124,8 @@ def create_default_tool_registry(
     semantic_search_def = ToolDefinition(
         name="semantic_search",
         description=(
-            "Search the enterprise knowledge base for documents, architectural guides, setup steps, "
-            "runbooks, and repositories using semantic vector search. Use this tool for conceptual "
-            "questions, architecture explanations, setup procedures, and policy inquiries."
+            "Search enterprise knowledge base for documents, runbooks, SOPs, setup steps, architectural guides, "
+            "policies, and files across all platforms (Dropbox, Notion, Confluence, Gmail, Jira, GitHub) using semantic vector search."
         ),
         parameters={
             "type": "object",
@@ -128,12 +136,12 @@ def create_default_tool_registry(
                 },
                 "source": {
                     "type": "string",
-                    "description": "Optional filter by platform: 'github', 'notion', 'dropbox', 'gmail', 'slack'.",
-                    "enum": ["github", "notion", "dropbox", "gmail", "slack"],
+                    "description": "Optional filter by platform ('github', 'notion', 'dropbox', 'gmail', 'confluence', 'jira'). Leave empty to search all platforms.",
+                    "enum": ["github", "notion", "dropbox", "gmail", "confluence", "jira"],
                 },
                 "resource_type": {
                     "type": "string",
-                    "description": "Optional filter by resource type: 'repository', 'file', 'issue', 'page', 'email', 'playbook'.",
+                    "description": "Optional filter by resource type ('repository', 'file', 'issue', 'page', 'email', 'playbook'). Leave empty to search all.",
                 },
                 "top_k": {
                     "type": "integer",
@@ -145,11 +153,20 @@ def create_default_tool_registry(
         },
     )
 
-    def handle_semantic_search(arguments: Dict[str, Any], user_context: Dict[str, Any]) -> List[Dict[str, Any]]:
-        query = arguments.get("query", "")
-        top_k = arguments.get("top_k", 5)
-        source = arguments.get("source")
-        resource_type = arguments.get("resource_type")
+    def handle_semantic_search(
+        arguments: Optional[Dict[str, Any]] = None,
+        user_context: Optional[Dict[str, Any]] = None,
+        **kwargs: Any,
+    ) -> List[Dict[str, Any]]:
+        args = dict(arguments or {})
+        args.update(kwargs)
+        query = str(args.get("query") or "")
+        try:
+            top_k = int(args.get("top_k", 5))
+        except (ValueError, TypeError):
+            top_k = 5
+        source = args.get("source")
+        resource_type = args.get("resource_type")
 
         return sem_retriever.search(
             query=query,
@@ -164,7 +181,7 @@ def create_default_tool_registry(
         name="keyword_search",
         description=(
             "Search for exact technical identifiers: Jira issue keys (e.g. 'PAY-928'), GitHub PR numbers "
-            "(e.g. '#1842'), HTTP error codes ('HTTP 401', 'ECONNREFUSED'), symbol names "
+            "(e.g. '#142'), HTTP error codes ('HTTP 401', 'ECONNREFUSED'), symbol names "
             "('AuthService.charge'), or specific filenames using BM25+ keyword search."
         ),
         parameters={
@@ -176,12 +193,12 @@ def create_default_tool_registry(
                 },
                 "source": {
                     "type": "string",
-                    "description": "Optional filter by platform: 'github', 'notion', 'dropbox', 'gmail', 'slack'.",
-                    "enum": ["github", "notion", "dropbox", "gmail", "slack"],
+                    "description": "Optional filter by platform: 'github', 'notion', 'dropbox', 'gmail', 'confluence', 'jira'. Leave empty to search all.",
+                    "enum": ["github", "notion", "dropbox", "gmail", "confluence", "jira"],
                 },
                 "resource_type": {
                     "type": "string",
-                    "description": "Optional filter by resource type: 'repository', 'file', 'issue', 'page', 'email', 'playbook'.",
+                    "description": "Optional filter by resource type: 'repository', 'file', 'issue', 'page', 'email', 'playbook'. Leave empty to search all.",
                 },
                 "top_k": {
                     "type": "integer",
@@ -193,11 +210,20 @@ def create_default_tool_registry(
         },
     )
 
-    def handle_keyword_search(arguments: Dict[str, Any], user_context: Dict[str, Any]) -> List[Dict[str, Any]]:
-        query = arguments.get("query", "")
-        top_k = arguments.get("top_k", 5)
-        source = arguments.get("source")
-        resource_type = arguments.get("resource_type")
+    def handle_keyword_search(
+        arguments: Optional[Dict[str, Any]] = None,
+        user_context: Optional[Dict[str, Any]] = None,
+        **kwargs: Any,
+    ) -> List[Dict[str, Any]]:
+        args = dict(arguments or {})
+        args.update(kwargs)
+        query = str(args.get("query") or "")
+        try:
+            top_k = int(args.get("top_k", 5))
+        except (ValueError, TypeError):
+            top_k = 5
+        source = args.get("source")
+        resource_type = args.get("resource_type")
 
         return kw_retriever.search(
             query=query,
@@ -211,24 +237,30 @@ def create_default_tool_registry(
     resource_lookup_def = ToolDefinition(
         name="resource_lookup",
         description=(
-            "Retrieve the complete text and metadata of a specific document or resource by its "
-            "canonical URI (e.g. 'github://repo/owner/name', 'notion://vault/master', 'jira://issue/PAY-928', "
-            "'https://github.com/...'), direct URL, chunk ID, or exact title."
+            "Retrieve complete text and metadata of a specific document, runbook, SOP, API specification, "
+            "or policy by its document title, topic name, canonical URI (e.g. 'github://...', 'https://...'), URL, "
+            "or chunk ID. Reconstructs the full document in sequential reading order with complete section paths."
         ),
         parameters={
             "type": "object",
             "properties": {
                 "resource_id": {
                     "type": "string",
-                    "description": "Canonical URI, URL, chunk ID, or exact document title to look up.",
+                    "description": "Document title (e.g. 'Disaster Recovery Runbook', 'Payments API Specification'), topic name, canonical URI, URL, or chunk ID to retrieve.",
                 },
             },
             "required": ["resource_id"],
         },
     )
 
-    def handle_resource_lookup(arguments: Dict[str, Any], user_context: Dict[str, Any]) -> Any:
-        resource_id = arguments.get("resource_id", "")
+    def handle_resource_lookup(
+        arguments: Optional[Dict[str, Any]] = None,
+        user_context: Optional[Dict[str, Any]] = None,
+        **kwargs: Any,
+    ) -> Any:
+        args = dict(arguments or {})
+        args.update(kwargs)
+        resource_id = str(args.get("resource_id") or "")
         doc = res_retriever.get_document(resource_id=resource_id, user_context=user_context)
         if doc:
             return doc.get("chunks", [])
@@ -275,20 +307,35 @@ def create_default_tool_registry(
         },
     )
 
-    def handle_graph_traversal(arguments: Dict[str, Any], user_context: Dict[str, Any]) -> List[Dict[str, Any]]:
-        operation = arguments.get("operation", "get_children")
-        target_id = arguments.get("target_id", "")
+    def handle_graph_traversal(
+        arguments: Optional[Dict[str, Any]] = None,
+        user_context: Optional[Dict[str, Any]] = None,
+        **kwargs: Any,
+    ) -> List[Dict[str, Any]]:
+        args = dict(arguments or {})
+        args.update(kwargs)
+        operation = str(args.get("operation") or "get_children")
+        target_id = str(args.get("target_id") or "")
 
         if operation == "get_children":
-            max_children = arguments.get("max_children", 20)
+            try:
+                max_children = int(args.get("max_children", 20))
+            except (ValueError, TypeError):
+                max_children = 20
             return grp_retriever.get_children(
                 parent_id=target_id,
                 max_children=max_children,
                 user_context=user_context,
             )
         elif operation == "get_neighbors":
-            window_before = arguments.get("window_before", 1)
-            window_after = arguments.get("window_after", 1)
+            try:
+                window_before = int(args.get("window_before", 1))
+            except (ValueError, TypeError):
+                window_before = 1
+            try:
+                window_after = int(args.get("window_after", 1))
+            except (ValueError, TypeError):
+                window_after = 1
             return grp_retriever.get_neighbors(
                 chunk_id=target_id,
                 window_before=window_before,
@@ -346,10 +393,16 @@ def create_default_tool_registry(
         },
     )
 
-    def handle_entity_search(arguments: Dict[str, Any], user_context: Dict[str, Any]) -> Any:
-        operation = arguments.get("operation", "get_pr_details")
-        target = arguments.get("target", "")
-        params = arguments.get("parameters")
+    def handle_entity_search(
+        arguments: Optional[Dict[str, Any]] = None,
+        user_context: Optional[Dict[str, Any]] = None,
+        **kwargs: Any,
+    ) -> Any:
+        args = dict(arguments or {})
+        args.update(kwargs)
+        operation = str(args.get("operation") or "get_pr_details")
+        target = str(args.get("target") or "")
+        params = args.get("parameters")
         return ent_retriever.search(
             operation=operation,
             target=target,
@@ -361,9 +414,9 @@ def create_default_tool_registry(
     hybrid_search_def = ToolDefinition(
         name="hybrid_search",
         description=(
-            "Execute unified multi-modal hybrid search across vector embeddings, BM25+ keywords, and "
-            "knowledge graph entities using Reciprocal Rank Fusion (RRF). Ideal when a query contains both "
-            "conceptual requirements and exact technical tokens (e.g. error codes, identifiers, function names)."
+            "Preferred default search tool: Executes unified multi-modal hybrid search across vector embeddings, BM25+ keywords, "
+            "and knowledge graphs using Reciprocal Rank Fusion (RRF). Ideal for searching runbooks, SOPs, procedures, error codes, "
+            "and technical documentation across all enterprise platforms (Dropbox, Notion, Confluence, Gmail, Jira, GitHub)."
         ),
         parameters={
             "type": "object",
@@ -379,12 +432,12 @@ def create_default_tool_registry(
                 },
                 "source": {
                     "type": "string",
-                    "description": "Optional filter by platform: 'github', 'notion', 'dropbox', 'gmail', 'slack'.",
-                    "enum": ["github", "notion", "dropbox", "gmail", "slack"],
+                    "description": "Optional filter by platform ('github', 'notion', 'dropbox', 'gmail', 'confluence', 'jira'). Leave empty to search all platforms.",
+                    "enum": ["github", "notion", "dropbox", "gmail", "confluence", "jira"],
                 },
                 "resource_type": {
                     "type": "string",
-                    "description": "Optional filter by resource type: 'repository', 'file', 'issue', 'page', 'email', 'playbook'.",
+                    "description": "Optional filter by resource type: 'repository', 'file', 'issue', 'page', 'email', 'playbook'. Leave empty to search all.",
                 },
                 "top_k": {
                     "type": "integer",
@@ -401,13 +454,25 @@ def create_default_tool_registry(
         },
     )
 
-    def handle_hybrid_search(arguments: Dict[str, Any], user_context: Dict[str, Any]) -> List[Dict[str, Any]]:
-        query = arguments.get("query", "")
-        top_k = arguments.get("top_k", 5)
-        modalities = arguments.get("modalities")
-        source = arguments.get("source")
-        resource_type = arguments.get("resource_type")
-        k = arguments.get("k", 60)
+    def handle_hybrid_search(
+        arguments: Optional[Dict[str, Any]] = None,
+        user_context: Optional[Dict[str, Any]] = None,
+        **kwargs: Any,
+    ) -> List[Dict[str, Any]]:
+        args = dict(arguments or {})
+        args.update(kwargs)
+        query = str(args.get("query") or "")
+        try:
+            top_k = int(args.get("top_k", 5))
+        except (ValueError, TypeError):
+            top_k = 5
+        modalities = args.get("modalities")
+        source = args.get("source")
+        resource_type = args.get("resource_type")
+        try:
+            k = int(args.get("k", 60))
+        except (ValueError, TypeError):
+            k = 60
 
         metadata_filters = {}
         if source:

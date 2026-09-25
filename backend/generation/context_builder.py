@@ -50,6 +50,7 @@ class ContextBuilder:
             context_lines.append(f"{header}\n{text}\n")
 
             citations.append({
+                "id": str(idx),
                 "index": str(idx),
                 "citation_index": idx,
                 "source": source,

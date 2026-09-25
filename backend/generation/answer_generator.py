@@ -22,11 +22,12 @@ class AnswerGenerator:
     SYSTEM_PROMPT = """You are an Enterprise Knowledge Assistant.
 Your task is to answer the user's inquiry accurately, professionally, and strictly grounded in the provided enterprise knowledge context.
 
-Rules:
-1. Grounding: Answer ONLY based on the facts present in the provided evidence. Do NOT hallucinate policies, keys, steps, or procedures.
-2. Citations: When stating facts, cite the source using bracketed numbers corresponding to the evidence (e.g. [1], [2]).
-3. Procedures: When explaining workflows or runbooks, present the steps in their correct sequential order.
-4. Completeness: If the provided evidence is insufficient to answer the question, clearly state what information is available and what is missing.
+Strict Grounding & Citation Rules:
+1. Grounding: Answer ONLY based on the facts present in the provided ENTERPRISE EVIDENCE CONTEXT. Do NOT assume, extrapolate, or hallucinate policies, keys, steps, procedures, or external knowledge.
+2. Citations: Use bracketed citation numbers (e.g. [1], [2]) corresponding ONLY to the numbered evidence chunks provided above.
+3. No External Citations: NEVER invent external citations, standards, textbooks, government agencies (e.g. NIST, FEMA, ISO, AWS external links), or unindexed URLs.
+4. Procedures: When explaining runbooks or workflows, present the exact steps from the evidence in their correct sequential order.
+5. Missing Information: If the provided evidence does not contain sufficient information to answer the question, state: "The provided enterprise documentation does not contain information regarding this request." Do NOT make up steps or policies.
 """
 
     def __init__(self, llm_provider: Optional[LLMProvider] = None) -> None:
@@ -41,6 +42,13 @@ Rules:
         """
         Generates a grounded final answer for the user query using retrieved chunks.
         """
+        if not chunks:
+            return {
+                "answer": "The provided enterprise documentation does not contain information regarding this request.",
+                "citations": [],
+                "chunks_used": 0,
+            }
+
         context_str, citations = ContextBuilder.build_context(chunks)
 
         user_content = f"""USER QUESTION:
@@ -49,12 +57,19 @@ Rules:
 ENTERPRISE EVIDENCE CONTEXT:
 {context_str}
 
-Please provide a clear, well-structured answer with source citations [1], [2], etc. where applicable."""
+Instructions:
+- Provide a clear, factual answer using ONLY the enterprise evidence context above.
+- Cite your sources with bracketed numbers [1], [2], etc. matching the evidence chunks above.
+- Do NOT include external citations, third-party references, or ungrounded claims."""
 
-        # Add system prompt if needed as part of message context
-        prompt_messages: List[Message] = []
+        prompt_messages: List[Message] = [
+            Message(role=MessageRole.SYSTEM, content=self.SYSTEM_PROMPT)
+        ]
         if conversation_history:
-            prompt_messages.extend(conversation_history)
+            # Only include prior human/user or system messages if needed
+            for m in conversation_history:
+                if m.role in (MessageRole.USER, MessageRole.SYSTEM):
+                    prompt_messages.append(m)
         prompt_messages.append(Message(role=MessageRole.USER, content=user_content))
 
         response = self.llm_provider.generate(
@@ -68,3 +83,4 @@ Please provide a clear, well-structured answer with source citations [1], [2], e
             "citations": citations,
             "chunks_used": len(chunks),
         }
+

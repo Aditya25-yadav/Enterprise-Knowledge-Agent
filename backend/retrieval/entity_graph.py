@@ -85,19 +85,25 @@ class InMemoryEntityGraph:
     # ── Generalized Graph Primitives ──────────────────────────────────────────
 
     def get_entity(self, node_id_or_alias: str) -> Optional[Dict[str, Any]]:
-        """Fetches any entity node by exact node_id or matching unique suffix."""
+        """Fetches any entity node by exact node_id or matching unique suffix/key."""
         if node_id_or_alias in self.nodes:
             n = self.nodes[node_id_or_alias]
             return {"label": n.label, "node_id": n.node_id, **n.properties}
 
-        # Search by suffix/key matching (e.g. "PAY-928" or "142" or "alice")
-        clean = node_id_or_alias.strip().lstrip("#")
+        # Search by suffix/key matching (e.g. "PAY-928" or "142" or "pr#142" or "alice")
+        clean = node_id_or_alias.strip()
+        clean_num = re.sub(r"^(pr|pull|issue|#|\s)+", "", clean, flags=re.IGNORECASE).strip().lstrip("#")
         for n in self.nodes.values():
+            n_num = str(n.properties.get("number", ""))
+            n_login = str(n.properties.get("login", ""))
+            n_sha = str(n.properties.get("sha", ""))
             if (
-                n.node_id.endswith(f":{clean}")
-                or str(n.properties.get("number")) == clean
-                or str(n.properties.get("login")) == clean
-                or str(n.properties.get("sha")) == clean
+                n.node_id == clean
+                or n.node_id.endswith(f":{clean}")
+                or (clean_num and n.node_id.endswith(f":{clean_num}"))
+                or (clean_num and n_num == clean_num)
+                or n_login.lower() == clean.lower()
+                or n_sha == clean
             ):
                 return {"label": n.label, "node_id": n.node_id, **n.properties}
         return None
@@ -550,8 +556,15 @@ class EntityGraphRetriever:
         self.neo4j_client: Optional[Neo4jClient] = neo4j_client
         self.mode: str = "memory"
 
-        # Auto-connect to Neo4j if configured
-        if self.neo4j_client is None:
+        # Check existing client or attempt connection only if unconfigured
+        if self.neo4j_client is not None:
+            if self.neo4j_client.test_connection():
+                self.mode = "neo4j"
+            else:
+                self.mode = "memory"
+        elif memory_graph is not None and len(memory_graph.nodes) > 0:
+            self.mode = "memory"
+        else:
             pwd = os.getenv("NEO4J_PASSWORD")
             if pwd:
                 try:
@@ -562,8 +575,6 @@ class EntityGraphRetriever:
                 except Exception as e:
                     logger.warning(f"Neo4j connection failed, using in-memory graph: {e}")
                     self.mode = "memory"
-        elif self.neo4j_client and self.neo4j_client.test_connection():
-            self.mode = "neo4j"
 
     # ── Generalized Query Dispatcher ──────────────────────────────────────────
 
@@ -662,12 +673,14 @@ class EntityGraphRetriever:
     # ── Native Parameterized Cypher Implementations for Neo4j Mode ────────────
 
     def _neo4j_get_entity(self, target: str) -> Optional[Dict[str, Any]]:
-        clean = target.strip().lstrip("#")
-        target_int = int(clean) if clean.isdigit() else None
+        clean = target.strip()
+        clean_num = re.sub(r"^(pr|pull|issue|#|\s)+", "", clean, flags=re.IGNORECASE).strip().lstrip("#")
+        target_int = int(clean_num) if clean_num.isdigit() else None
         cypher = """
         MATCH (n)
         WHERE n.node_id = $target
            OR n.node_id ENDS WITH (':' + $clean)
+           OR ($clean_num <> '' AND n.node_id ENDS WITH (':' + $clean_num))
            OR ($target_int IS NOT NULL AND n.number = $target_int)
            OR n.login = $clean
            OR n.sha = $clean
@@ -675,7 +688,7 @@ class EntityGraphRetriever:
         RETURN labels(n)[0] AS label, n.node_id AS node_id, properties(n) AS properties
         LIMIT 1
         """
-        rows = self.neo4j_client.run_query(cypher, {"target": target, "clean": clean, "target_int": target_int})
+        rows = self.neo4j_client.run_query(cypher, {"target": target, "clean": clean, "clean_num": clean_num, "target_int": target_int})
         if not rows:
             return None
         r = rows[0]

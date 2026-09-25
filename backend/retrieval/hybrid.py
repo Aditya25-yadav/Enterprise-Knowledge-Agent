@@ -51,6 +51,11 @@ def reciprocal_rank_fusion(
     if not ranked_lists:
         return []
 
+    try:
+        k = int(k) if k is not None else 60
+    except (ValueError, TypeError):
+        k = 60
+
     effective_weights = weights or {}
     fused_scores: Dict[str, float] = {}
     fused_items: Dict[str, Dict[str, Any]] = {}
@@ -111,8 +116,13 @@ def reciprocal_rank_fusion(
         item["ranks_per_modality"] = modality_ranks[chunk_id]
         results.append(item)
 
-    if top_k is not None and top_k > 0:
-        results = results[:top_k]
+    if top_k is not None:
+        try:
+            top_k_val = int(top_k)
+            if top_k_val > 0:
+                results = results[:top_k_val]
+        except (ValueError, TypeError):
+            pass
 
     return results
 
@@ -175,8 +185,16 @@ class HybridRetriever:
         if not query or not query.strip():
             return []
 
+        try:
+            top_k = int(top_k) if top_k is not None else 10
+        except (ValueError, TypeError):
+            top_k = 10
+
         active_modalities = modalities or ["vector", "keyword", "graph"]
-        effective_k = k if k is not None else self.default_k
+        try:
+            effective_k = int(k) if k is not None else int(self.default_k)
+        except (ValueError, TypeError):
+            effective_k = int(self.default_k)
         effective_weights = weights or self.default_weights
 
         ranked_lists: Dict[str, List[Dict[str, Any]]] = {}

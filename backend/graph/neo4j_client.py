@@ -50,8 +50,13 @@ if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 # ─────────────────────────────────────────────────────────────────────────────
 
-from neo4j import GraphDatabase
-from neo4j.exceptions import ServiceUnavailable, AuthError
+try:
+    from neo4j import GraphDatabase
+    from neo4j.exceptions import ServiceUnavailable, AuthError
+except ImportError:
+    GraphDatabase = None
+    ServiceUnavailable = Exception
+    AuthError = Exception
 
 from backend.models.graph import (
     GitHubGraphBundle,
@@ -154,6 +159,12 @@ class Neo4jClient:
         self.user = user or os.getenv("NEO4J_USERNAME", "neo4j")
         self.password = password or os.getenv("NEO4J_PASSWORD", "")
         self.database = database or os.getenv("NEO4J_DATABASE", "neo4j")
+        self.last_error: Optional[str] = None
+
+        if GraphDatabase is None:
+            raise ImportError(
+                "The 'neo4j' package is required to connect to Neo4j. Install it via 'pip install neo4j'."
+            )
 
         if not self.password:
             raise ValueError(
@@ -186,7 +197,8 @@ class Neo4jClient:
             with self.driver.session(database=self.database) as session:
                 result = session.run("RETURN 1 AS ok")
                 return result.single()["ok"] == 1
-        except (ServiceUnavailable, AuthError, Exception):
+        except Exception as e:
+            self.last_error = str(e)
             return False
 
     def get_server_info(self) -> Dict[str, Any]:

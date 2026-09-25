@@ -50,15 +50,9 @@ class CrossEncoderReranker:
         if self._model is None and not self._model_load_failed:
             try:
                 from sentence_transformers import CrossEncoder
-
-                is_offline = os.getenv("HF_HUB_OFFLINE", "0") == "1" or os.getenv("TRANSFORMERS_OFFLINE", "0") == "1"
-                kwargs = {"device": self.device}
-                if is_offline:
-                    kwargs["local_files_only"] = True
-
-                self._model = CrossEncoder(self.model_name, **kwargs)
+                self._model = CrossEncoder(self.model_name, device=self.device, local_files_only=True)
             except Exception:
-                # In offline or missing weight environments, activate fallback cross-scorer
+                # In offline or un-cached weight environments, activate instant in-process fallback cross-scorer
                 self._model_load_failed = True
                 self._model = None
         return self._model

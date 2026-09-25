@@ -81,7 +81,13 @@ class GeminiProvider(LLMProvider):
         contents: List[types.Content] = []
 
         for msg in messages:
-            if msg.role == MessageRole.USER:
+            if msg.role == MessageRole.SYSTEM:
+                contents.append(types.Content(
+                    role="user",
+                    parts=[types.Part.from_text(text=f"[System Instruction]\n{msg.content}")],
+                ))
+
+            elif msg.role == MessageRole.USER:
                 contents.append(types.Content(
                     role="user",
                     parts=[types.Part.from_text(text=msg.content)],

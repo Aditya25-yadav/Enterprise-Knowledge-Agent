@@ -184,13 +184,15 @@ class QdrantVectorStore:
             resource_type=resource_type,
         )
 
+        limit_val = int(top_k) if top_k is not None else 5
+
         # Execute vector search
         if hasattr(self._client, "query_points"):
             response = self._client.query_points(
                 collection_name=col_name,
                 query=query_vector,
                 query_filter=search_filter,
-                limit=top_k,
+                limit=limit_val,
             )
             points = response.points
             
@@ -199,7 +201,7 @@ class QdrantVectorStore:
                 collection_name=col_name,
                 query_vector=query_vector,
                 query_filter=search_filter,
-                limit=top_k,
+                limit=limit_val,
             )
 
         formatted_results = []

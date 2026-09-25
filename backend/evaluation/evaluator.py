@@ -94,7 +94,7 @@ You MUST respond strictly with a valid JSON object in the following format:
             return EvaluationResult(
                 relevance_score=0.0,
                 evidence_sufficient=False,
-                missing_information=[f"No evidence retrieved for query: '{query}'"],
+                missing_information=[query],
                 unsupported_claims=[],
                 recommended_action=RecommendedAction.RETRIEVE_MORE.value,
                 recommended_tool="semantic_search",
@@ -118,7 +118,9 @@ RETRIEVED EVIDENCE CHUNKS ({len(chunks)}):
 
 Evaluate the evidence above for answering the user question. Return ONLY a valid JSON object."""
 
-        prompt_messages: List[Message] = []
+        prompt_messages: List[Message] = [
+            Message(role=MessageRole.SYSTEM, content=self.SYSTEM_PROMPT)
+        ]
         if conversation_history:
             prompt_messages.extend(conversation_history)
         prompt_messages.append(Message(role=MessageRole.USER, content=user_content))

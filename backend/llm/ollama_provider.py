@@ -89,7 +89,10 @@ class OllamaProvider(LLMProvider):
         """
         result = []
         for msg in messages:
-            if msg.role == MessageRole.USER:
+            if msg.role == MessageRole.SYSTEM:
+                result.append({"role": "system", "content": msg.content})
+
+            elif msg.role == MessageRole.USER:
                 result.append({"role": "user", "content": msg.content})
 
             elif msg.role == MessageRole.ASSISTANT:

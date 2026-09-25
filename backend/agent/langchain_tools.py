@@ -96,7 +96,7 @@ class KeywordSearchInput(BaseModel):
 class ResourceLookupInput(BaseModel):
     """Input parameters for direct resource lookup."""
     resource_id: str = Field(
-        description="Canonical URI or resource ID (e.g. 'github://repo/owner/name', 'notion://vault/master', 'jira://issue/PAY-928', 'https://...')."
+        description="Document title (e.g. 'Disaster Recovery Runbook', 'Payments API Specification'), topic name, canonical URI (e.g. 'github://repo/owner/name', 'notion://vault/master', 'jira://issue/PAY-928', 'https://...'), URL, or chunk ID."
     )
 
 
@@ -336,8 +336,9 @@ def create_langchain_tools(
     resource_tool = StructuredTool.from_function(
         name="resource_lookup",
         description=(
-            "Retrieve complete text and metadata of a specific document or resource by its canonical URI "
-            "(e.g. 'github://repo/owner/name', 'notion://vault/master', 'jira://issue/PAY-928', 'https://...'), URL, or chunk ID."
+            "Retrieve complete text and metadata of a specific document, runbook, SOP, API specification, or policy "
+            "by its document title, topic name, canonical URI (e.g. 'github://...', 'https://...'), URL, or chunk ID. "
+            "Reconstructs the full document in sequential reading order."
         ),
         func=run_resource_lookup,
         args_schema=ResourceLookupInput,

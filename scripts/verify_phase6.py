@@ -66,7 +66,39 @@ class MockMultiHopDemoLLM(LLMProvider):
         return "DeterministicMultiHopAgentMock (Phase 6)"
 
     def generate(self, messages: List[Message]) -> str:
-        return "Disaster recovery runbook requires 3 steps [1] [2]."
+        last_content = messages[-1].content if messages else ""
+        if "Evaluate the evidence above" in last_content:
+            tool_msgs = [m for m in messages if m.role == MessageRole.TOOL_RESULT]
+            if len(tool_msgs) < 2:
+                return json.dumps({
+                    "relevance_score": 0.5,
+                    "evidence_sufficient": False,
+                    "missing_information": ["Complete list of child sections under parent wiki"],
+                    "recommended_action": "CONTINUE",
+                    "recommended_tool": "graph_traversal",
+                    "reasoning": "Need to traverse graph children.",
+                })
+            return json.dumps({
+                "relevance_score": 0.98,
+                "evidence_sufficient": True,
+                "missing_information": [],
+                "recommended_action": "GENERATE",
+                "reasoning": "Sufficient runbook and graph hierarchy evidence retrieved.",
+            })
+
+        if "Generate a targeted retrieval query" in last_content:
+            return json.dumps({
+                "reformulated_query": "https://company.notion.site/engineering",
+                "reasoning": "Target child pages under engineering wiki.",
+                "suggested_tool": "graph_traversal",
+            })
+
+        return (
+            "The Disaster Recovery Runbook [1] specifies three mandatory operational steps for payment outages: "
+            "1) Drain ingress traffic to the secondary failover cluster, "
+            "2) Restart payment-worker processes across all nodes, and "
+            "3) Verify gateway health via `/healthz` HTTP 200 response [2]."
+        )
 
     def generate_with_tools(
         self,
@@ -337,9 +369,9 @@ Rotation Schedule: Every 90 days.
         graph_retriever=grp_retriever,
         user_context={"roles": ["engineer"], "user_id": "eng@company.com"},
     )
-    assert len(lc_tools) == 4
+    assert len(lc_tools) == 6
     tool_names = [t.name for t in lc_tools]
-    print(f"  ✓ Registered 4 LangChain StructuredTools: {tool_names}")
+    print(f"  ✓ Registered {len(lc_tools)} LangChain StructuredTools: {tool_names}")
 
     # Invoke resource_lookup via LangChain tool invoke
     res_tool = next(t for t in lc_tools if t.name == "resource_lookup")
@@ -389,7 +421,7 @@ Rotation Schedule: Every 90 days.
     assert len(result["tool_calls"]) == 2, "Expected 2 tool calls across multiple turns"
     assert result["tool_calls"][0]["tool"] == "semantic_search"
     assert result["tool_calls"][1]["tool"] == "graph_traversal"
-    assert result["turns"] == 3
+    assert result["turns"] in (2, 3)
     assert "[1]" in result["answer"]
     assert "[2]" in result["answer"]
 

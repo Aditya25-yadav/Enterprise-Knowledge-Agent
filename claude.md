@@ -1857,3 +1857,283 @@ This document maintains a chronological record of all architectural decisions, c
 - [`scripts/verify_phase10.md`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/scripts/verify_phase10.md) (Created)
 - [`docs/phases.md`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/docs/phases.md) (Updated)
 - [`claude.md`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/claude.md) (Updated)
+
+---
+
+## Step 77: Created End-to-End Live Testing Harness & Local LLM Operator Guide
+- **Date:** 2026-09-24
+- **Time:** 21:52 IST
+- **Purpose:** Created a unified end-to-end live testing script ([`scripts/run_e2e_live.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/scripts/run_e2e_live.py)) and comprehensive step-by-step documentation ([`docs/e2e_local_llm_testing.md`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/docs/e2e_local_llm_testing.md)) for running and verifying the complete Enterprise Knowledge Agent stack using real local LLMs (Ollama / `qwen2.5` / `llama3.1`) across all 6 enterprise connectors.
+
+### Key Deliverables:
+1. **Unified Live Runner Script ([`scripts/run_e2e_live.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/scripts/run_e2e_live.py))**:
+   - Ingests multi-modal documents from GitHub, Jira, Notion, Dropbox, Gmail, and Confluence into OKF v0.2 concept bundles.
+   - Populates dense embeddings (Qdrant), sparse BM25+ index, and Developer Property Graph (InMemoryEntityGraph).
+   - Initializes `HybridRetriever` (RRF) and `CrossEncoderReranker`.
+   - Connects to local Ollama daemon (`qwen2.5:7b` / `llama3.1:8b`) via `OllamaProvider` (or Gemini via `GeminiProvider`).
+   - Executes 5 automated test cases covering cross-system bug tracing, API specifications, runbook SOPs, and strict RBAC isolation.
+   - Supports interactive terminal chat REPL mode (`--interactive`) with dynamic role-switching (`role ciso_admin`, `role guest`).
+2. **Comprehensive Developer Documentation ([`docs/e2e_local_llm_testing.md`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/docs/e2e_local_llm_testing.md))**:
+   - Complete guide to installing Ollama, pulling tool-calling models, configuring `.env` for connectors, and running live queries.
+   - Troubleshooting tips for local model tool calling, memory management, and context window limits.
+
+### Files Created / Modified:
+- [`scripts/run_e2e_live.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/scripts/run_e2e_live.py) (Created)
+- [`docs/e2e_local_llm_testing.md`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/docs/e2e_local_llm_testing.md) (Created)
+- [`claude.md`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/claude.md) (Updated)
+
+---
+
+## Step 78: Created End-to-End Google Gemini API Testing & Operator Guide
+- **Date:** 2026-09-24
+- **Time:** 21:58 IST
+- **Purpose:** Created comprehensive operator documentation ([`docs/e2e_gemini_api_testing.md`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/docs/e2e_gemini_api_testing.md)) detailing setup, API key management, environment configuration, automated verification, and interactive chat REPL workflows using Google Gemini API (`GeminiProvider` with `gemini-2.5-flash` / `gemini-2.5-pro`) over local vector/BM25/graph storage.
+
+### Key Deliverables:
+1. **Google Gemini Testing Guide ([`docs/e2e_gemini_api_testing.md`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/docs/e2e_gemini_api_testing.md))**:
+   - Detailed guide on obtaining and securing Gemini API keys from Google AI Studio.
+   - Configuration via `.env` or direct shell export (`GEMINI_API_KEY`, `GEMINI_MODEL=gemini-2.5-flash`).
+   - Instructions for running the automated live test suite across all 6 connectors with Gemini.
+   - Interactive chat REPL instructions with multi-role RBAC switching (`role ciso_admin`, `role guest`).
+   - Feature comparison table comparing local Ollama execution with cloud Gemini execution.
+   - Troubleshooting section for rate limits (429 errors), SDK installation, and key authentication.
+
+### Files Created / Modified:
+- [`docs/e2e_gemini_api_testing.md`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/docs/e2e_gemini_api_testing.md) (Created)
+- [`claude.md`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/claude.md) (Updated)
+
+---
+
+## Step 79: Configured Persistent Local Disk Storage & Re-indexing Flags in Live Testing Pipeline
+- **Date:** 2026-09-24
+- **Time:** 22:10 IST
+- **Purpose:** Upgraded [`scripts/run_e2e_live.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/scripts/run_e2e_live.py) to default to persistent local disk storage (`mode="local"`, `./data/qdrant_storage`), allowing vector payloads and BM25 index to persist across runs, with automated reuse detection and `--reset-storage` wipe options.
+- **Changes Made:**
+  1. Updated `setup_live_pipeline` in [`scripts/run_e2e_live.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/scripts/run_e2e_live.py) to accept `qdrant_mode="local"`, `qdrant_path="./data/qdrant_storage"`, `qdrant_url`, and `reset_storage`.
+  2. Implemented intelligent persistent cache detection: when existing indexed points are found on disk, re-embedding is skipped automatically unless `--reset-storage` is supplied.
+  3. Added CLI argument parsing in `main()` for `--qdrant-mode`, `--qdrant-path`, `--qdrant-url`, `--bm25-path`, and `--reset-storage`.
+  4. Updated [`docs/e2e_local_llm_testing.md`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/docs/e2e_local_llm_testing.md) and [`docs/e2e_gemini_api_testing.md`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/docs/e2e_gemini_api_testing.md) to document persistent storage modes, options, and performance benefits.
+  5. Cleaned up duplicate lines and imports in [`backend/ingestion/pipeline.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/ingestion/pipeline.py) and added safe optional import fallback for `neo4j` in [`backend/graph/neo4j_client.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/graph/neo4j_client.py).
+
+### Files Created / Modified:
+- [`scripts/run_e2e_live.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/scripts/run_e2e_live.py) (Modified)
+- [`backend/ingestion/pipeline.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/ingestion/pipeline.py) (Modified)
+- [`backend/graph/neo4j_client.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/graph/neo4j_client.py) (Modified)
+- [`docs/e2e_local_llm_testing.md`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/docs/e2e_local_llm_testing.md) (Modified)
+- [`docs/e2e_gemini_api_testing.md`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/docs/e2e_gemini_api_testing.md) (Modified)
+- [`claude.md`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/claude.md) (Updated)
+
+---
+
+## Step 80: Added First-Class Neo4j Live Database Connectivity & CLI Arguments in E2E Runner
+- **Date:** 2026-09-24
+- **Time:** 22:15 IST
+- **Purpose:** Integrated full Neo4j live database connectivity into [`scripts/run_e2e_live.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/scripts/run_e2e_live.py), allowing seamless switching between the zero-dependency `InMemoryEntityGraph` and a live standalone/clustered Neo4j instance.
+- **Changes Made:**
+  1. Added `setup_entity_graph()` in [`scripts/run_e2e_live.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/scripts/run_e2e_live.py) that detects `NEO4J_PASSWORD`, connects via [`Neo4jClient`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/graph/neo4j_client.py), creates schema constraints, and synchronizes developer nodes and relationship edges into Neo4j.
+  2. Implemented graceful fallback to `InMemoryEntityGraph` when Neo4j is offline or unconfigured.
+  3. Added CLI arguments to `main()`: `--neo4j-uri`, `--neo4j-user`, `--neo4j-password`, and `--neo4j-database`.
+  4. Updated startup status banners in [`scripts/run_e2e_live.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/scripts/run_e2e_live.py) to display active graph target (`Neo4j (bolt://...)` or `In-Memory Property Graph (RAM)`).
+  5. Updated operator testing guides [`docs/e2e_local_llm_testing.md`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/docs/e2e_local_llm_testing.md) and [`docs/e2e_gemini_api_testing.md`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/docs/e2e_gemini_api_testing.md) with Neo4j CLI parameters and configuration notes.
+
+### Files Created / Modified:
+- [`scripts/run_e2e_live.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/scripts/run_e2e_live.py) (Modified)
+- [`docs/e2e_local_llm_testing.md`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/docs/e2e_local_llm_testing.md) (Modified)
+- [`docs/e2e_gemini_api_testing.md`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/docs/e2e_gemini_api_testing.md) (Modified)
+- [`claude.md`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/claude.md) (Updated)
+
+---
+
+## Step 81: Added Detailed Step-by-Step Neo4j Setup & Credentials Instructions to Documentation
+- **Date:** 2026-09-24
+- **Time:** 22:17 IST
+- **Purpose:** Added explicit step-by-step setup guides and credentials instructions in [`docs/e2e_local_llm_testing.md`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/docs/e2e_local_llm_testing.md) and [`docs/e2e_gemini_api_testing.md`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/docs/e2e_gemini_api_testing.md) covering In-Memory fallback (0 credentials), Local Docker (`docker run`), Neo4j AuraDB (cloud), and `.env` configuration.
+- **Changes Made:**
+  1. Added Neo4j environment variable definitions (`NEO4J_URI`, `NEO4J_USERNAME`, `NEO4J_PASSWORD`, `NEO4J_DATABASE`) to `.env` example blocks in both guides.
+  2. Added dedicated "Step-by-Step Neo4j Setup Options" sections with exact `docker run` commands and Neo4j Aura cloud console instructions.
+
+### Files Created / Modified:
+- [`docs/e2e_local_llm_testing.md`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/docs/e2e_local_llm_testing.md) (Modified)
+- [`docs/e2e_gemini_api_testing.md`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/docs/e2e_gemini_api_testing.md) (Modified)
+- [`claude.md`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/claude.md) (Updated)
+
+---
+
+## Step 82: Updated requirements.txt with Complete Package Dependencies
+- **Date:** 2026-09-24
+- **Time:** 22:38 IST
+- **Purpose:** Added all remaining and newly integrated packages into [`requirements.txt`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/requirements.txt), structured with categorized sections.
+- **Packages Added / Organized:**
+  1. **LLM Providers:** `ollama>=0.4.0`, `google-genai>=1.0.0`
+  2. **Core / Data Validation:** `pydantic>=2.7.0`
+  3. **Testing:** `pytest>=8.0.0`, `pytest-asyncio>=0.23.0`
+  4. **Vector & Graph:** `qdrant-client==1.19.0`, `sentence-transformers==6.0.1`, `rank-bm25==0.2.2`, `neo4j==6.3.0`
+  5. **Agent Orchestration:** `langgraph==1.2.11`, `langchain-core==1.6.3`
+  6. **Enterprise Connectors & Parsers:** `requests`, `requests-oauthlib`, `dropbox`, `google-api-python-client`, `google-auth`, `pypdf`, `python-docx`, `openpyxl`, `lxml`
+
+### Files Created / Modified:
+## Step 83: Hardened Tool Handler Dispatch & Offline SentenceTransformer Loading
+- **Date:** 2026-09-24
+- **Time:** 23:20 IST
+- **Purpose:** Resolved tool handler parameter dispatch bug in [`backend/agent/tools.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/agent/tools.py) and added offline-safe `local_files_only=True` handling to [`backend/ingestion/embedder.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/ingestion/embedder.py).
+- **Changes Made:**
+  1. Updated [`ToolRegistry.execute`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/agent/tools.py#L46-L76) to use `inspect.signature` for precise parameter binding (`arguments`, `user_context`, kwargs) instead of catching and masking internal `TypeError`s with a failing fallback.
+  2. Updated all 6 tool handlers in [`backend/agent/tools.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/agent/tools.py) (`handle_semantic_search`, `handle_keyword_search`, `handle_resource_lookup`, `handle_graph_traversal`, `handle_entity_search`, `handle_hybrid_search`) to accept `(arguments=None, user_context=None, **kwargs)` with robust argument dictionary merging.
+  3. Updated [`LocalEmbedder._get_model`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/ingestion/embedder.py#L34-L50) to respect `HF_HUB_OFFLINE=1` and `TRANSFORMERS_OFFLINE=1` by setting `local_files_only=True` to eliminate network retries and delays when loading cached local models.
+  4. Updated verification test scripts ([`scripts/verify_entity_graph.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/scripts/verify_entity_graph.py), [`scripts/verify_phase4.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/scripts/verify_phase4.py), [`scripts/verify_phase6.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/scripts/verify_phase6.py)) to reflect the complete 6-tool suite (`hybrid_search`, `semantic_search`, `keyword_search`, `resource_lookup`, `graph_traversal`, `github_entity_search`) and multi-hop turn count assertions.
+  5. Verified 100% test pass rate across all 101 pytest suite tests and all phase verification scripts (`scripts/verify_phase*.py`).
+
+### Files Created / Modified:
+- [`backend/agent/tools.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/agent/tools.py) (Modified)
+- [`backend/ingestion/embedder.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/ingestion/embedder.py) (Modified)
+- [`scripts/verify_entity_graph.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/scripts/verify_entity_graph.py) (Modified)
+- [`scripts/verify_phase4.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/scripts/verify_phase4.py) (Modified)
+- [`claude.md`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/claude.md) (Updated)
+
+---
+
+## Step 84: Hardened Numerical Parameter Type Coercion & Fixed Citation Formatting in Live REPL
+- **Date:** 2026-09-24
+- **Time:** 23:35 IST
+- **Purpose:** Hardened numeric parameter type coercion across retrieval and tool execution layers (`top_k`, `k`, `window_before`, etc.) to prevent `TypeError` when LLMs serialize numbers as strings, and fixed citation index formatting in the live REPL and test runner.
+- **Changes Made:**
+  1. Updated [`QdrantVectorStore.search`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/storage/qdrant_client.py) to defensively cast `limit = int(top_k) if top_k is not None else 5`, resolving `< not supported between instances of 'str' and 'int'` when local LLMs (e.g. Ollama `qwen2.5`) pass string integers in tool call arguments.
+  2. Updated [`BM25Index.search`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/storage/bm25_index.py) and [`reciprocal_rank_fusion` / `HybridRetriever.search`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/retrieval/hybrid.py) with defensive `int()` casting for `top_k` and `k`.
+  3. Hardened all 6 tool handlers in [`backend/agent/tools.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/agent/tools.py) with safe `int()` coercion across all numeric parameters (`top_k`, `k`, `max_children`, `window_before`, `window_after`).
+  4. Updated [`ContextBuilder.build_context`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/generation/context_builder.py) to include `"id": str(idx)` and updated citation resolution in [`scripts/run_e2e_live.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/scripts/run_e2e_live.py) (`cit.get('citation_index') or cit.get('index') or cit.get('id') or 1`) to eliminate `[None]` in output logs.
+  5. Added `test_16_string_numeric_arguments_in_tools_and_planner` in [`backend/agent/tests/test_langgraph_agent.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/agent/tests/test_langgraph_agent.py) to guarantee regression prevention for string-encoded numeric parameters.
+  6. Verified 100% test pass rate across all 101 pytest suite tests, unittest suites, and all phase verification scripts (`scripts/verify_phase*.py` and `scripts/verify_entity_graph.py`).
+
+### Files Created / Modified:
+- [`backend/storage/qdrant_client.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/storage/qdrant_client.py) (Modified)
+- [`backend/storage/bm25_index.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/storage/bm25_index.py) (Modified)
+- [`backend/retrieval/hybrid.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/retrieval/hybrid.py) (Modified)
+- [`backend/generation/context_builder.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/generation/context_builder.py) (Modified)
+- [`claude.md`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/claude.md) (Updated)
+
+---
+
+## Step 85: Enhanced Neo4j AuraDB Routing Diagnostics and Connection Error Handling
+- **Date:** 2026-09-24
+- **Time:** 23:40 IST
+- **Purpose:** Improved error diagnostics for Neo4j AuraDB routing failures (`Unable to retrieve routing information`) and eliminated duplicate connection retry attempts in `EntityGraphRetriever`.
+- **Changes Made:**
+  1. Updated [`Neo4jClient`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/graph/neo4j_client.py) to capture and expose `last_error` on connection failure.
+  2. Updated [`EntityGraphRetriever.__init__`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/retrieval/entity_graph.py) to avoid attempting redundant connection retries when the caller has already attempted and resolved fallback to `InMemoryEntityGraph`.
+  3. Updated [`setup_entity_graph` in `scripts/run_e2e_live.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/scripts/run_e2e_live.py) to print clear actionable diagnostics when connecting to Neo4j AuraDB (highlighting paused database instances in `console.neo4j.io` and checking `.env` credentials).
+  4. Verified all 102 unit tests in test suite pass.
+
+### Files Created / Modified:
+- [`backend/graph/neo4j_client.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/graph/neo4j_client.py) (Modified)
+- [`claude.md`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/claude.md) (Updated)
+
+---
+
+## Step 86: Strict Citation Grounding Anti-Hallucination Guardrails & Interactive REPL Observability
+- **Date:** 2026-09-24
+- **Time:** 23:55 IST
+- **Purpose:** Enforced strict anti-hallucination guardrails in `AnswerGenerator` to prevent models from inventing external citations (such as NIST, FEMA, ISO, or unindexed URLs), added `MessageRole.SYSTEM` support across LLM providers, and enhanced REPL observability to display executed tool calls, arguments, turns, and chunk counts.
+- **Changes Made:**
+  1. Updated [`AnswerGenerator`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/generation/answer_generator.py) with strict citation rules:
+     - Added `Message(role=MessageRole.SYSTEM, content=self.SYSTEM_PROMPT)` to enforce that answers must be grounded exclusively in the retrieved enterprise evidence chunks.
+     - Mandated bracketed citations `[1], [2]` matching ONLY the provided evidence chunks and strictly forbade external bibliography fabrication.
+     - Added an immediate empty chunk check: if no chunks were retrieved, returns a clean refusal (*"The provided enterprise documentation does not contain information regarding this request."*) without hallucinating steps or references.
+  2. Added `MessageRole.SYSTEM = "system"` to [`backend/llm/base.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/llm/base.py) and added handling in [`backend/llm/ollama_provider.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/llm/ollama_provider.py) and [`backend/llm/gemini_provider.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/llm/gemini_provider.py).
+  3. Preceded Reasoner turns in [`backend/agent/langgraph_planner.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/agent/langgraph_planner.py) with `REASONER_SYSTEM_PROMPT` to guide local LLMs (like `llama3.1:8b`) toward tool execution instead of refusal, and ensured `_generator_node` synthesizes grounded answers via `AnswerGenerator` when chunks are present.
+  4. Enhanced interactive REPL output in [`scripts/run_e2e_live.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/scripts/run_e2e_live.py) to print:
+     - ⏱️ Execution Time and Reasoner Turns.
+     - 🛠️ Executed Tool Calls and Arguments.
+     - 📑 Retrieved Evidence Chunks and Reranking status.
+     - 🏷️ Grounded Citations with source names and URLs.
+  5. Verified 100% pass rate across all 102 unit tests in the pytest suite.
+
+### Files Created / Modified:
+- [`backend/generation/answer_generator.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/generation/answer_generator.py) (Modified)
+- [`backend/llm/base.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/llm/base.py) (Modified)
+- [`backend/llm/ollama_provider.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/llm/ollama_provider.py) (Modified)
+- [`backend/llm/gemini_provider.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/llm/gemini_provider.py) (Modified)
+- [`claude.md`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/claude.md) (Updated)
+
+---
+
+## Step 87: Refined Tool Descriptions, Cross-Platform Search Directives & Reformulation Sanitation
+- **Date:** 2026-09-25
+- **Time:** 00:05 IST
+- **Purpose:** Resolved issues where non-exact title queries (e.g. "give me the database failure sop") misrouted to `resource_lookup` instead of `hybrid_search`, sanitized query reformulator fallback to prevent recursive query corruption, corrected connector platform enums across all tools, and added configurable `--max-turns` CLI option.
+- **Changes Made:**
+  1. Updated [`backend/agent/tools.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/agent/tools.py):
+     - Refined `resource_lookup` description to explicitly forbid using it for topical/keyword queries and instruct models to use `hybrid_search` or `semantic_search` instead.
+     - Refined `hybrid_search` and `semantic_search` descriptions to highlight searching runbooks, SOPs, and procedures across all connectors (Dropbox, Notion, Confluence, Gmail, Jira, GitHub).
+     - Fixed `source` parameter enum to include all supported enterprise platforms (`["github", "notion", "dropbox", "gmail", "confluence", "jira"]`).
+  2. Updated [`backend/evaluation/evaluator.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/evaluation/evaluator.py):
+     - Sanitized `missing_information` for empty chunks to pass the clean query topic rather than `No evidence retrieved for query: ...`, preventing recursive corruption of reformulated queries.
+     - Added `SYSTEM` prompt injection in `evaluate_evidence`.
+  3. Updated [`backend/agent/reformulator.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/agent/reformulator.py):
+     - Injected `SYSTEM_PROMPT` to guide JSON output format.
+     - Sanitized query parsing and heuristic fallback to strip any legacy artifact prefixes.
+  4. Updated [`scripts/run_e2e_live.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/scripts/run_e2e_live.py):
+     - Added `--max-turns` argument (defaulting to 5) and wired it to `LangGraphAgentPlanner`.
+  5. Verified 100% pass rate across all 102 unit tests in the pytest suite.
+
+### Files Created / Modified:
+- [`backend/agent/tools.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/agent/tools.py) (Modified)
+- [`backend/evaluation/evaluator.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/evaluation/evaluator.py) (Modified)
+- [`backend/agent/reformulator.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/agent/reformulator.py) (Modified)
+- [`scripts/run_e2e_live.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/scripts/run_e2e_live.py) (Modified)
+- [`claude.md`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/claude.md) (Updated)
+
+---
+
+## Step 88: Upgraded Multi-Tiered Document Matching in `ResourceLookupRetriever` & Document-First Tool Directives
+- **Date:** 2026-09-25
+- **Time:** 00:15 IST
+- **Purpose:** Upgraded `ResourceLookupRetriever` with a multi-tiered matching engine allowing the agent to interpret user queries as exact/approximate document lookups first without failing on minor title discrepancies, while preserving strict database-level RBAC pre-filtering and sequential chunk stitching.
+- **Changes Made:**
+  1. Updated [`ResourceLookupRetriever.lookup`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/retrieval/resource_lookup.py):
+     - **Tier 1 (Exact Match):** Direct match on `resource_id`, `url`, `chunk_id`, exact document title, PR shorthand (`#142`), or Jira issue keys (`PAY-928`).
+     - **Tier 2 (Normalized Substring & Token-Set Overlap):** Tokenizes query and document titles/URL slugs, strips stopwords, and computes precision + Jaccard similarity. Resolves queries like *"give me the disaster recovery module"* or *"payments api"* directly to the corresponding document runbook (*"Disaster Recovery & Database Failover Runbook"* / *"Payments API Specification"*).
+     - **Tier 3 (BM25 Lexical Title Search Fallback):** Ranks candidate document groups via BM25 scores if direct matching yields no candidates.
+     - **Tier 4 (Qdrant Vector Store Fallback):** Uses Qdrant scroll/search with RBAC filters for distributed storage setups.
+     - **RBAC & Sequential Stitching:** Evaluates all matched chunk candidates against the caller's security context (`sec_ctx`) via `RBACResolver.evaluate_access` and sorts output sequentially by `chunk_index` ascending.
+  2. Updated Tool Definitions in [`backend/agent/tools.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/agent/tools.py) and [`backend/agent/langchain_tools.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/agent/langchain_tools.py):
+     - Clarified `resource_lookup` description to indicate it retrieves complete documents, runbooks, SOPs, API specifications, and policies by title, topic name, canonical URI, URL, or chunk ID.
+  3. Updated System Instructions in [`backend/agent/planner.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/agent/planner.py) and [`backend/agent/langgraph_planner.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/agent/langgraph_planner.py):
+     - Updated guideline 4 to recommend `resource_lookup` for retrieving full documents, runbooks, SOPs, specifications, or policies by document title or topic.
+  4. Added Unit Tests in [`backend/retrieval/tests/test_graph_retrievers.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/retrieval/tests/test_graph_retrievers.py):
+     - `test_03b_lookup_by_fuzzy_topic_and_token_overlap`: Validates *"disaster recovery module"* -> *"Disaster Recovery Runbook"* and *"payments api"* -> *"Payments API Specification"*.
+     - `test_03c_lookup_by_url_slug_and_filename`: Validates path slug resolution (*"dr-runbook"*).
+  5. Verified 100% test pass rate across all 104 tests in the test suite (`.venv/bin/pytest backend/ingestion backend/storage backend/retrieval backend/ranking backend/security backend/evaluation backend/agent`).
+
+### Files Created / Modified:
+- [`backend/retrieval/resource_lookup.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/retrieval/resource_lookup.py) (Modified)
+- [`backend/agent/tools.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/agent/tools.py) (Modified)
+- [`backend/agent/langchain_tools.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/agent/langchain_tools.py) (Modified)
+- [`backend/agent/planner.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/agent/planner.py) (Modified)
+- [`backend/agent/langgraph_planner.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/agent/langgraph_planner.py) (Modified)
+- [`backend/retrieval/tests/test_graph_retrievers.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/retrieval/tests/test_graph_retrievers.py) (Modified)
+- [`claude.md`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/claude.md) (Updated)
+
+---
+
+## Step 89: Fixed Role Persona Injection in Live REPL & Enhanced Entity Graph PR Lookup
+- **Date:** 2026-09-25
+- **Time:** 00:30 IST
+- **Purpose:** Resolved a bug where the interactive REPL in `scripts/run_e2e_live.py` hardcoded the `"employee"` role in `[current_role, "employee"]`, which inadvertently granted employee-level permissions to `guest` personas. Also enhanced PR identifier resolution in `EntityGraphRetriever` to parse variations like `pr#142`, `PR 142`, and `PR#142`.
+- **Changes Made:**
+  1. Updated [`run_interactive_repl` in `scripts/run_e2e_live.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/scripts/run_e2e_live.py):
+     - Removed hardcoded `"employee"` from `user_context` role assignment.
+     - Automatically sets `user_id = f"{current_role}@external.com"` for guest/contractor personas and passes `roles: [current_role]`, ensuring `RoleHierarchy` only grants guest permissions.
+  2. Updated [`InMemoryEntityGraph.get_entity` and `EntityGraphRetriever._neo4j_get_entity`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/retrieval/entity_graph.py):
+     - Added regex prefix stripping (`r"^(pr|pull|issue|#|\s)+"`) so that queries like `"pr#142"` or `"PR 142"` resolve to PR entity node `#142` directly.
+  3. Verified 100% test pass rate across all 104 unit tests in the pytest suite (`.venv/bin/pytest backend/ingestion backend/storage backend/retrieval backend/ranking backend/security backend/evaluation backend/agent`).
+
+### Files Created / Modified:
+- [`scripts/run_e2e_live.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/scripts/run_e2e_live.py) (Modified)
+- [`backend/retrieval/entity_graph.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/retrieval/entity_graph.py) (Modified)
+- [`claude.md`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/claude.md) (Updated)
+
+
+
+
+
+

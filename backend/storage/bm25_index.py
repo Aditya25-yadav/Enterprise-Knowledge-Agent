@@ -172,6 +172,11 @@ class BM25Index:
         if not self._bm25 or not query or not query.strip():
             return []
 
+        try:
+            top_k = int(top_k) if top_k is not None else 5
+        except (ValueError, TypeError):
+            top_k = 5
+
         from backend.security import BM25FilterTranslator, get_default_rbac_resolver
 
         query_tokens = self.tokenize(query)
