@@ -83,6 +83,7 @@ from backend.retrieval.keyword import KeywordRetriever
 from backend.retrieval.resource_lookup import ResourceLookupRetriever
 from backend.retrieval.semantic import SemanticRetriever
 from backend.storage.bm25_index import BM25Index
+from backend.storage.checkpointers import BaseCheckpointSaver, get_checkpointer
 from backend.storage.qdrant_client import QdrantVectorStore
 
 
@@ -328,6 +329,8 @@ def setup_live_pipeline(
     qdrant_collection: str = "enterprise_live_knowledge",
     bm25_path: str = "./data/live_bm25_index.json",
     reset_storage: bool = False,
+    checkpoint_mode: str = "sqlite",
+    checkpoint_path: str = "./data/chat_sessions.db",
     neo4j_uri: Optional[str] = None,
     neo4j_user: Optional[str] = None,
     neo4j_password: Optional[str] = None,
@@ -338,7 +341,7 @@ def setup_live_pipeline(
 ) -> tuple[LangGraphAgentPlanner, HybridRetriever]:
     """
     Initializes and wires the complete end-to-end Enterprise Knowledge pipeline:
-    Storage -> Retrievers -> Reranker -> LangGraph Planner with Local LLM.
+    Storage -> Retrievers -> Reranker -> LangGraph Planner with Local LLM and Stateful Checkpointer.
     """
     print("📦 [1/4] Initializing Storage Layers (Qdrant Vector Store + BM25 Sparse Index)...")
     embedder = LocalEmbedder()
@@ -419,6 +422,15 @@ def setup_live_pipeline(
         resource_lookup_retriever=resource_retriever,
     )
 
+    # Initialize checkpointer for persistent conversation threads
+    checkpointer: Optional[BaseCheckpointSaver] = None
+    if checkpoint_mode and checkpoint_mode.lower() != "none":
+        checkpointer = get_checkpointer(mode=checkpoint_mode, db_path=checkpoint_path)
+        if checkpoint_mode.lower() == "sqlite":
+            print(f"       💾 Conversation Threads: SQLite persistence enabled @ {checkpoint_path}")
+        else:
+            print(f"       🧠 Conversation Threads: In-memory volatile checkpointer enabled")
+
     print(f"🤖 [5/5] Connecting to LLM Provider: {llm_provider_name.upper()}...")
     if llm_model:
         if llm_provider_name == "ollama":
@@ -446,6 +458,7 @@ def setup_live_pipeline(
         llm_provider=llm_provider,
         tool_registry=tool_registry,
         reranker=reranker,
+        checkpointer=checkpointer,
         enable_reranking=True,
         max_turns=max_turns,
         max_retrieval_attempts=3,
@@ -534,18 +547,27 @@ def run_automated_live_tests(planner: LangGraphAgentPlanner) -> None:
 
 
 def run_interactive_repl(planner: LangGraphAgentPlanner) -> None:
-    """Runs interactive terminal chat REPL allowing user to ask arbitrary live questions."""
+    """Runs interactive terminal chat REPL allowing user to ask arbitrary live questions across persistent threads."""
     print("\n" + "=" * 80)
     print("💬 INTERACTIVE ENTERPRISE KNOWLEDGE AGENT REPL")
-    print("   Type your questions below. Type 'exit', 'quit', or 'role <role_name>' to switch persona.")
+    print("   Type your questions below.")
+    print("   Special commands:")
+    print("     • 'role <role_name>'   - Switch active security persona (e.g. engineer, ciso_admin, guest)")
+    print("     • 'thread <thread_id>' - Switch active conversation thread/session")
+    print("     • 'threads'            - List all saved conversation threads in storage")
+    print("     • 'new'                - Start a fresh conversation thread")
+    print("     • 'history'            - Display message history for current thread")
+    print("     • 'exit' or 'quit'     - Exit REPL")
     print("=" * 80)
 
     current_role = "engineer"
     current_user = "user@company.com"
+    current_thread_id = f"session_{int(time.time())}"
+    print(f"Active Session Thread: '{current_thread_id}'")
 
     while True:
         try:
-            prompt_str = f"\n[{current_role}] > "
+            prompt_str = f"\n[{current_role} | {current_thread_id}] > "
             user_input = input(prompt_str).strip()
             if not user_input:
                 continue
@@ -563,17 +585,62 @@ def run_interactive_repl(planner: LangGraphAgentPlanner) -> None:
                 print(f"Switched active security role to: '{current_role}' (User: {current_user})")
                 continue
 
+            if user_input.lower().startswith("thread ") or user_input.lower().startswith("/thread "):
+                cmd_parts = user_input.split(" ", 1)
+                if len(cmd_parts) > 1 and cmd_parts[1].strip():
+                    current_thread_id = cmd_parts[1].strip()
+                    print(f"Switched active conversation thread to: '{current_thread_id}'")
+                continue
+
+            if user_input.lower() in ("threads", "/threads"):
+                if planner.checkpointer and hasattr(planner.checkpointer, "get_all_threads"):
+                    saved_threads = planner.checkpointer.get_all_threads()
+                    if saved_threads:
+                        print(f"\n📂 Saved Conversation Threads ({len(saved_threads)}):")
+                        for t in saved_threads:
+                            active_tag = " (active)" if t == current_thread_id else ""
+                            print(f"   • {t}{active_tag}")
+                    else:
+                        print(f"No saved conversation threads in database yet. Active thread: '{current_thread_id}'")
+                else:
+                    print(f"Active thread: '{current_thread_id}' (Ephemeral or in-memory checkpointer)")
+                continue
+
+            if user_input.lower() in ("new", "/new", "clear", "/clear"):
+                current_thread_id = f"session_{int(time.time())}"
+                print(f"Started new conversation thread: '{current_thread_id}'")
+                continue
+
+            if user_input.lower() in ("history", "/history"):
+                if planner.checkpointer:
+                    config = {"configurable": {"thread_id": current_thread_id}}
+                    t_tuple = planner.checkpointer.get_tuple(config)
+                    if t_tuple and t_tuple.checkpoint and "channel_values" in t_tuple.checkpoint:
+                        msgs = t_tuple.checkpoint["channel_values"].get("messages", [])
+                        print(f"\n📜 Conversation History for Thread '{current_thread_id}' ({len(msgs)} turns):")
+                        for m in msgs:
+                            sender = "User" if isinstance(m, HumanMessage) else ("Agent" if isinstance(m, AIMessage) else type(m).__name__)
+                            content = getattr(m, "content", "")
+                            if content:
+                                print(f"  [{sender}]: {content[:300]}{'...' if len(content) > 300 else ''}")
+                    else:
+                        print(f"No history recorded yet for thread '{current_thread_id}'.")
+                else:
+                    print("Checkpointer disabled. Message history not retained.")
+                continue
+
             try:
                 print("\n🤖 Reasoning and retrieving multi-modal evidence across connectors...")
                 t0 = time.time()
                 result = planner.run(
                     query=user_input,
                     user_context={"roles": [current_role], "user_id": current_user},
+                    thread_id=current_thread_id,
                 )
                 elapsed = time.time() - t0
 
                 print(f"\n{'─' * 80}")
-                print(f"⏱️  Execution Time: {elapsed:.2f}s | Turns: {result.get('turns', 1)}")
+                print(f"⏱️  Execution Time: {elapsed:.2f}s | Turns: {result.get('turns', 1)} | Thread: {result.get('thread_id', current_thread_id)}")
                 if result.get("tool_calls"):
                     print(f"🛠️  Tools Called ({len(result['tool_calls'])}):")
                     for tc in result["tool_calls"]:
@@ -613,6 +680,8 @@ def main() -> None:
     parser.add_argument("--qdrant-path", default="./data/qdrant_storage", help="Local disk storage path for Qdrant (default: ./data/qdrant_storage)")
     parser.add_argument("--qdrant-url", default=None, help="Remote Qdrant server URL for server mode (e.g. http://localhost:6333)")
     parser.add_argument("--bm25-path", default="./data/live_bm25_index.json", help="Path to BM25 index file (default: ./data/live_bm25_index.json)")
+    parser.add_argument("--checkpoint-mode", default="sqlite", choices=["sqlite", "memory", "none"], help="Session checkpointer backend (default: sqlite)")
+    parser.add_argument("--checkpoint-path", default="./data/chat_sessions.db", help="Local SQLite file for multi-turn session persistence (default: ./data/chat_sessions.db)")
     parser.add_argument("--reset-storage", action="store_true", help="Force wipe and re-index persistent storage")
     parser.add_argument("--neo4j-uri", default=os.getenv("NEO4J_URI", "bolt://localhost:7687"), help="Neo4j connection URI (default: bolt://localhost:7687)")
     parser.add_argument("--neo4j-user", default=os.getenv("NEO4J_USERNAME", "neo4j"), help="Neo4j username (default: neo4j)")
@@ -624,13 +693,15 @@ def main() -> None:
 
     storage_target = args.qdrant_path if args.qdrant_mode == "local" else (args.qdrant_url or ":memory:")
     graph_target = f"Neo4j ({args.neo4j_uri})" if args.neo4j_password else "In-Memory Property Graph (RAM)"
+    checkpoint_target = args.checkpoint_path if args.checkpoint_mode == "sqlite" else args.checkpoint_mode.upper()
 
     print("=" * 80)
     print("🌐 ENTERPRISE KNOWLEDGE AGENT — END-TO-END LIVE PIPELINE TEST")
-    print(f"   Provider: {args.provider.upper()} | Model: {args.model}")
-    print(f"   Vectors:  Qdrant ({args.qdrant_mode.upper()}) @ {storage_target}")
-    print(f"   Graph:    {graph_target}")
-    print(f"   Turns:    Max {args.max_turns} agent turns")
+    print(f"   Provider:  {args.provider.upper()} | Model: {args.model}")
+    print(f"   Vectors:   Qdrant ({args.qdrant_mode.upper()}) @ {storage_target}")
+    print(f"   Graph:     {graph_target}")
+    print(f"   Sessions:  Checkpointer ({args.checkpoint_mode.upper()}) @ {checkpoint_target}")
+    print(f"   Turns:     Max {args.max_turns} agent turns")
     print("=" * 80)
 
     try:
@@ -640,6 +711,8 @@ def main() -> None:
             qdrant_url=args.qdrant_url,
             bm25_path=args.bm25_path,
             reset_storage=args.reset_storage,
+            checkpoint_mode=args.checkpoint_mode,
+            checkpoint_path=args.checkpoint_path,
             neo4j_uri=args.neo4j_uri,
             neo4j_user=args.neo4j_user,
             neo4j_password=args.neo4j_password,
