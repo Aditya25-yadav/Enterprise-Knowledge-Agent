@@ -2132,6 +2132,51 @@ This document maintains a chronological record of all architectural decisions, c
 - [`backend/retrieval/entity_graph.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/retrieval/entity_graph.py) (Modified)
 - [`claude.md`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/claude.md) (Updated)
 
+---
+
+## Step 90: Persistent Multi-Turn Chatbot Sessions, LangGraph Checkpointing, and Context Management Threads
+- **Date:** 2026-09-25
+- **Time:** 08:50 IST
+- **Purpose:** Implemented stateful multi-turn conversation threads across the Enterprise Knowledge Agent using LangGraph checkpointers (`MemorySaver` and `SqliteCheckpointSaver`). Supported contextual query disambiguation across turns (e.g. resolving pronouns like *"Who approved it?"*, *"What files did she modify in that PR?"*), context window sliding trimming, thread isolation, and persistent REPL session management.
+- **Changes Made:**
+  1. **SQLite & Memory Checkpointer Layer ([`backend/storage/checkpointers.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/storage/checkpointers.py) & [`backend/storage/__init__.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/storage/__init__.py)):**
+     - Built `SqliteCheckpointSaver` adhering to LangGraph's `BaseCheckpointSaver` interface with WAL journal mode and typed serialization (`JsonPlusSerializer` with explicitly registered model types to prevent deserialization warnings).
+     - Implemented `get_tuple`, `list`, `put`, `put_writes`, `get_all_threads`, and `delete_thread`.
+     - Added `get_checkpointer(mode, db_path)` factory function supporting `"sqlite"` and `"memory"`.
+     - Exported `MemorySaver`, `SqliteCheckpointSaver`, and `get_checkpointer` in [`backend/storage/__init__.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/storage/__init__.py).
+  2. **Agent State & Context Management ([`backend/agent/state.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/agent/state.py)):**
+     - Extended `AgentState` schema with `thread_id: Optional[str]` and `conversation_summary: Optional[str]`.
+     - Implemented `trim_conversation_history(messages, max_messages=20)` to maintain LLM context budgets while preserving leading system instructions.
+  3. **LangGraph Agent Workflow ([`backend/agent/langgraph_planner.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/agent/langgraph_planner.py)):**
+     - Initialized checkpointer in `LangGraphAgentPlanner.__init__` and compiled graph via `workflow.compile(checkpointer=self.checkpointer)`.
+     - Enhanced `REASONER_SYSTEM_PROMPT` to guide LLM reasoning on pronoun and follow-up disambiguation across prior conversation turns.
+     - Updated `_reasoner_node` to pass trimmed thread history to LLM.
+     - Updated `_generator_node` to append `AIMessage(content=answer)` to state messages for checkpoint persistence across turns.
+     - Updated `run()` to accept `thread_id`, `conversation_history`, and inject `{"configurable": {"thread_id": ...}}`.
+  4. **Live E2E Testing & Interactive REPL ([`scripts/run_e2e_live.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/scripts/run_e2e_live.py)):**
+     - Added CLI options `--checkpoint-mode` (default `"sqlite"`, choices `["sqlite", "memory", "none"]`) and `--checkpoint-path` (default `"./data/chat_sessions.db"`).
+     - Wired checkpointer into `setup_live_pipeline()`.
+     - Added session and thread management commands in `run_interactive_repl()`:
+       - `thread <id>` / `/thread <id>`: Switch active conversation thread.
+       - `threads` / `/threads`: List all saved sessions in SQLite database.
+       - `new` / `/new`: Start a fresh conversation thread.
+       - `history` / `/history`: Display chronological conversation turns for the active thread.
+  5. **Unit Tests & Verification ([`backend/agent/tests/test_conversation_threads.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/agent/tests/test_conversation_threads.py) & [`scripts/verify_threads.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/scripts/verify_threads.py)):**
+     - Added 6 comprehensive unit tests validating multi-turn persistence, thread isolation, SQLite disk persistence across planner re-instantiation, message trimming, RBAC enforcement across turns, and SQLite management APIs.
+     - Created `scripts/verify_threads.py` testing a 3-turn interactive conversation session with follow-up pronoun disambiguation.
+  6. Verified 100% test pass rate across all 110 unit tests in the pytest suite (`.venv/bin/pytest backend/ingestion backend/storage backend/retrieval backend/ranking backend/security backend/evaluation backend/agent`).
+
+### Files Created / Modified:
+- [`backend/storage/checkpointers.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/storage/checkpointers.py) (Created)
+- [`backend/storage/__init__.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/storage/__init__.py) (Modified)
+- [`backend/agent/state.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/agent/state.py) (Modified)
+- [`backend/agent/langgraph_planner.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/agent/langgraph_planner.py) (Modified)
+- [`scripts/run_e2e_live.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/scripts/run_e2e_live.py) (Modified)
+- [`backend/agent/tests/test_conversation_threads.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/backend/agent/tests/test_conversation_threads.py) (Created)
+- [`scripts/verify_threads.py`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/scripts/verify_threads.py) (Created)
+- [`claude.md`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/claude.md) (Updated)
+
+
 
 
 

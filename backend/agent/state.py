@@ -30,6 +30,8 @@ class AgentState(TypedDict):
       - rerank_scores: Calibrated relevance scores from CrossEncoderReranker.
       - rerank_applied: Boolean flag indicating whether reranking has been executed.
       - turn_count: Number of reasoning / execution turns.
+      - thread_id: Optional identifier for conversation session / persistent thread.
+      - conversation_summary: Optional rolling summary of previous conversation history.
       - error: Optional error message if execution encounters an exception.
     """
     query: str
@@ -46,5 +48,37 @@ class AgentState(TypedDict):
     rerank_scores: Dict[str, float]
     rerank_applied: bool
     turn_count: int
+    thread_id: Optional[str]
+    conversation_summary: Optional[str]
     error: Optional[str]
+
+
+def trim_conversation_history(
+    messages: List[Any],
+    max_messages: int = 20,
+) -> List[Any]:
+    """
+    Trims long conversation message histories using a sliding window to prevent
+    context window overflow during multi-turn chat sessions. Preserves the leading
+    SystemMessage (if present) and retains the most recent `max_messages`.
+
+    Args:
+        messages: List of LangChain or internal Message instances.
+        max_messages: Maximum number of recent conversational messages to retain.
+
+    Returns:
+        Trimmed list of messages safely within LLM context budget.
+    """
+    if not messages or len(messages) <= max_messages:
+        return list(messages)
+
+    from langchain_core.messages import SystemMessage
+
+    system_msgs = [m for m in messages if isinstance(m, SystemMessage) or getattr(m, "role", None) == "system"]
+    non_system = [m for m in messages if not (isinstance(m, SystemMessage) or getattr(m, "role", None) == "system")]
+
+    budget_for_non_system = max(0, max_messages - len(system_msgs))
+    trimmed_non_system = non_system[-budget_for_non_system:] if budget_for_non_system > 0 else []
+    return system_msgs + trimmed_non_system
+
 

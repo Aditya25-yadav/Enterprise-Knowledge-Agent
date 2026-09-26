@@ -46,7 +46,7 @@ from langchain_core.messages import (
 from langgraph.graph import END, START, StateGraph
 
 from backend.agent.reformulator import QueryReformulator
-from backend.agent.state import AgentState
+from backend.agent.state import AgentState, trim_conversation_history
 from backend.agent.tools import ToolRegistry, create_default_tool_registry
 from backend.evaluation.evaluator import EvidenceEvaluator
 from backend.generation.answer_generator import AnswerGenerator
@@ -61,6 +61,7 @@ from backend.llm.base import (
 from backend.llm.factory import get_llm_provider
 from backend.models.evaluation import EvaluationResult, RecommendedAction
 from backend.ranking.reranker import CrossEncoderReranker
+from backend.storage.checkpointers import BaseCheckpointSaver, get_checkpointer
 
 
 def _to_internal_messages(langchain_msgs: List[BaseMessage]) -> List[Message]:
@@ -143,10 +144,12 @@ Guidelines for Tool Selection:
         evidence_evaluator: Optional[EvidenceEvaluator] = None,
         query_reformulator: Optional[QueryReformulator] = None,
         reranker: Optional[CrossEncoderReranker] = None,
+        checkpointer: Optional[Any] = None,
         enable_reranking: bool = True,
         rerank_threshold: float = 0.0,
         max_turns: int = 5,
         max_retrieval_attempts: int = 3,
+        max_history_messages: int = 20,
     ) -> None:
         self.llm_provider = llm_provider or get_llm_provider()
         self.tool_registry = tool_registry or create_default_tool_registry()
@@ -156,8 +159,10 @@ Guidelines for Tool Selection:
         self.enable_reranking = enable_reranking
         self.rerank_threshold = rerank_threshold
         self.reranker = reranker or (CrossEncoderReranker() if enable_reranking else None)
+        self.checkpointer = checkpointer
         self.max_turns = max_turns
         self.max_retrieval_attempts = max_retrieval_attempts
+        self.max_history_messages = max_history_messages
         self.graph = self._build_graph()
 
     # ── Graph Node Implementations ───────────────────────────────────────────
@@ -167,6 +172,9 @@ Guidelines for Tool Selection:
         "(GitHub, Jira, Confluence, Notion, Dropbox, Gmail). Always select and execute the most "
         "relevant retrieval tool (hybrid_search, semantic_search, keyword_search, resource_lookup, "
         "graph_traversal, github_entity_search) to locate internal enterprise documents. "
+        "If the user asks follow-up questions containing pronouns or ambiguous references "
+        "(e.g. 'it', 'that PR', 'the author', 'that ticket', 'who approved it?'), inspect previous "
+        "conversation turns to resolve them into concrete entity names or identifiers before issuing tool calls. "
         "Never fabricate outside sources."
     )
 
@@ -177,7 +185,11 @@ Guidelines for Tool Selection:
         """
         turn_count = state.get("turn_count", 0) + 1
         tools = self.tool_registry.get_definitions()
-        internal_messages = _to_internal_messages(state.get("messages", []))
+        
+        # Trim historical messages to maintain token budget across extended multi-turn chat
+        raw_messages = state.get("messages", [])
+        trimmed_messages = trim_conversation_history(raw_messages, max_messages=self.max_history_messages)
+        internal_messages = _to_internal_messages(trimmed_messages)
 
         if not internal_messages or internal_messages[0].role != MessageRole.SYSTEM:
             internal_messages.insert(0, Message(role=MessageRole.SYSTEM, content=self.REASONER_SYSTEM_PROMPT))
@@ -381,10 +393,19 @@ Guidelines for Tool Selection:
             )
             answer = gen_res["answer"]
 
-        return {
+        # Append final AIMessage to messages for state checkpointing across turns
+        last_msg = state.get("messages", [])[-1] if state.get("messages") else None
+        new_messages = []
+        if not (isinstance(last_msg, AIMessage) and not getattr(last_msg, "tool_calls", None) and last_msg.content == answer):
+            new_messages.append(AIMessage(content=answer))
+
+        res: Dict[str, Any] = {
             "answer": answer,
             "citations": citations,
         }
+        if new_messages:
+            res["messages"] = new_messages
+        return res
 
     # ── Conditional Routing ──────────────────────────────────────────────────
 
@@ -459,6 +480,8 @@ Guidelines for Tool Selection:
         workflow.add_edge("reformulator", "reasoner")
         workflow.add_edge("generator", END)
 
+        if self.checkpointer is not None:
+            return workflow.compile(checkpointer=self.checkpointer)
         return workflow.compile()
 
     # ── Execution Entrypoint ─────────────────────────────────────────────────
@@ -467,10 +490,22 @@ Guidelines for Tool Selection:
         self,
         query: str,
         user_context: Optional[Dict[str, Any]] = None,
+        thread_id: Optional[str] = None,
         conversation_history: Optional[List[BaseMessage]] = None,
+        config: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
-        Executes the compiled LangGraph workflow with Self-RAG reflection for a user query.
+        Executes the compiled LangGraph workflow with Self-RAG reflection and multi-turn checkpointing.
+
+        Args:
+            query: User query string.
+            user_context: Security context dictionary (roles, user_id, groups).
+            thread_id: Optional conversation session/thread identifier for multi-turn persistence.
+            conversation_history: Optional explicit message list prepended to the turn.
+            config: Optional LangGraph execution config dictionary.
+
+        Returns:
+            Result dictionary containing answer, citations, executed tool calls, and session metadata.
         """
         user_context = user_context or {
             "roles": ["employee"],
@@ -498,10 +533,19 @@ Guidelines for Tool Selection:
             "rerank_scores": {},
             "rerank_applied": False,
             "turn_count": 0,
+            "thread_id": thread_id,
+            "conversation_summary": None,
             "error": None,
         }
 
-        final_state = self.graph.invoke(initial_state)
+        exec_config = dict(config or {})
+        if thread_id or self.checkpointer is not None:
+            t_id = thread_id or "default_session"
+            if "configurable" not in exec_config:
+                exec_config["configurable"] = {}
+            exec_config["configurable"].setdefault("thread_id", t_id)
+
+        final_state = self.graph.invoke(initial_state, config=exec_config if exec_config else None)
 
         # Extract tool execution logs from messages
         executed_tool_calls: List[Dict[str, Any]] = []
@@ -526,5 +570,7 @@ Guidelines for Tool Selection:
             "rerank_applied": final_state.get("rerank_applied", False),
             "rerank_scores": final_state.get("rerank_scores", {}),
             "turns": final_state.get("turn_count", 1),
+            "thread_id": final_state.get("thread_id", thread_id),
+            "messages": final_state.get("messages", []),
             "llm_provider": getattr(self.llm_provider, "__class__", type(self.llm_provider)).__name__,
         }
