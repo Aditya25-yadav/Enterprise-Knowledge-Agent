@@ -238,3 +238,69 @@ class GraphRetriever:
         # Sort by step number ascending
         steps.sort(key=lambda x: (x.get("sequence") or {}).get("step", 0))
         return steps
+
+    # ── 4. Automatic Sequential Window Expansion ─────────────────────────────
+
+    def expand_sequential_windows(
+        self,
+        chunks: List[Dict[str, Any]],
+        window_size: int = 1,
+        user_context: Optional[Dict[str, Any]] = None,
+        max_total_chunks: int = 30,
+    ) -> List[Dict[str, Any]]:
+        """
+        Inspects retrieved chunks for sequential procedures/runbooks, automatically
+        pulling preceding and succeeding sibling chunks to restore complete procedural context.
+
+        Args:
+            chunks: List of candidate chunk dictionaries.
+            window_size: Number of adjacent steps to expand (default: 1 step before/after).
+            user_context: Security context for RBAC evaluation.
+            max_total_chunks: Safety cap to prevent unbounded context growth.
+
+        Returns:
+            Deduplicated list of chunks with procedural steps expanded and ordered.
+        """
+        if not chunks:
+            return []
+
+        seen_ids: Set[str] = set()
+        expanded_list: List[Dict[str, Any]] = []
+
+        for chunk in chunks:
+            c_id = str(chunk.get("chunk_id") or chunk.get("id") or "")
+            if not c_id:
+                expanded_list.append(chunk)
+                continue
+
+            # Check if this chunk is a step in a sequence or has sibling pointers
+            has_sequence = bool(chunk.get("sequence") or chunk.get("prev_chunk_id") or chunk.get("next_chunk_id"))
+            
+            if has_sequence and window_size > 0:
+                neighbors = self.get_neighbors(
+                    chunk_id=c_id,
+                    window_before=window_size,
+                    window_after=window_size,
+                    user_context=user_context,
+                )
+                if neighbors:
+                    for n in neighbors:
+                        n_id = str(n.get("chunk_id") or n.get("id") or "")
+                        if n_id and n_id not in seen_ids:
+                            seen_ids.add(n_id)
+                            # Mark if it is an expanded sibling
+                            if n_id != c_id:
+                                n["is_expanded_sibling"] = True
+                            expanded_list.append(n)
+                            if len(expanded_list) >= max_total_chunks:
+                                break
+                    continue
+
+            if c_id not in seen_ids:
+                seen_ids.add(c_id)
+                expanded_list.append(chunk)
+
+            if len(expanded_list) >= max_total_chunks:
+                break
+
+        return expanded_list

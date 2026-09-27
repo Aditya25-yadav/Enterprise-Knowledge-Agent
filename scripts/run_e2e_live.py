@@ -2,7 +2,7 @@
 """
 End-to-End Live Testing & Verification Script for Enterprise Knowledge Agent.
 
-Executes the complete pipeline using a Real Local LLM (Ollama / Local OpenAI endpoint):
+Executes the complete pipeline using Local LLMs (Ollama) or Cloud LLMs (Google Gemini):
   1. Loads / ingests data across all 6 Enterprise Connectors:
      - GitHub (Repos, PRs, Commits, Issues)
      - Jira (Tickets, Bug Reports, ADF)
@@ -10,23 +10,27 @@ Executes the complete pipeline using a Real Local LLM (Ollama / Local OpenAI end
      - Dropbox (Technical Runbooks, PDF/Office docs)
      - Gmail (Incident Emails, Status Threads)
      - Confluence (Engineering RFCs, SOPs)
-  2. Runs structure-preserving chunking (SmartOKFChunker).
-  3. Generates dense vector embeddings (LocalEmbedder) and builds Qdrant vector store.
-  4. Generates sparse BM25+ inverted index (BM25Index).
-  5. Builds Developer Property Graph (InMemoryEntityGraph).
-  6. Connects to Local LLM (OllamaProvider: qwen2.5 / llama3.1 / mistral-nemo).
-  7. Executes the 6-Node LangGraph Agent state machine with Hybrid Search (RRF),
-     Cross-Encoder Reranking, Self-RAG reflection, and grounded answer synthesis with citations.
+  2. Builds Map-First Global Master Index (global_index.md) and sync ledger (global_log.md).
+  3. Runs structure-preserving chunking (SmartOKFChunker).
+  4. Generates dense vector embeddings (LocalEmbedder) and builds Qdrant vector store.
+  5. Generates sparse BM25+ inverted index (BM25Index).
+  6. Builds Developer Property Graph (InMemoryEntityGraph or live Neo4j).
+  7. Connects to LLM Provider (Ollama: qwen2.5 / llama3.1 / mistral-nemo, or Gemini: gemini-2.5-flash / pro).
+  8. Executes the LangGraph Agent state machine with 7 specialized tools:
+     catalog_discovery, hybrid_search, semantic_search, keyword_search, resource_lookup,
+     graph_traversal, and github_entity_search.
+  9. Features Cross-Encoder Reranking, Self-RAG reflection, SQLite conversation thread persistence,
+     fast-path direct answering for meta/general queries, and query scope directives (@enterprise, @general, @<connector>).
 
 Usage:
     # Run automated test suite against local Ollama
-    python scripts/run_e2e_live.py
+    python scripts/run_e2e_live.py --provider ollama --model qwen2.5:7b
 
-    # Run with a specific model
-    python scripts/run_e2e_live.py --model qwen2.5:7b
+    # Run automated test suite against Google Gemini
+    python scripts/run_e2e_live.py --provider gemini --model gemini-2.5-flash
 
-    # Run in interactive chat mode
-    python scripts/run_e2e_live.py --interactive
+    # Run interactive chat REPL mode
+    python scripts/run_e2e_live.py --provider gemini --interactive
 """
 
 from __future__ import annotations
@@ -52,7 +56,10 @@ load_dotenv(dotenv_path=PROJECT_ROOT / ".env")
 os.environ.setdefault("HF_HUB_OFFLINE", "1")
 os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
+
 from backend.agent.langgraph_planner import LangGraphAgentPlanner
+from backend.agent.query_scope import parse_query_scope
 from backend.agent.tools import create_default_tool_registry
 from backend.connectors.confluence import ConfluenceConnector
 from backend.connectors.dropbox import DropboxConnector
@@ -554,6 +561,7 @@ def setup_live_pipeline(
     llm_provider_name: str = "ollama",
     llm_model: Optional[str] = None,
     max_turns: int = 5,
+    context_format: str = "standard",
 ) -> tuple[LangGraphAgentPlanner, HybridRetriever]:
     """
     Initializes and wires the complete end-to-end Enterprise Knowledge pipeline:
@@ -638,13 +646,13 @@ def setup_live_pipeline(
 
     llm_provider = get_llm_provider(llm_provider_name)
 
-    print("📋 [5/6] Building Global Master Index (global_index.md) & Sync Ledger (global_log.md)...")
+    print("📋 [5/6] Building Global Master Index (global_index.md, global_index.toon) & Sync Ledger (global_log.md)...")
     catalog_manager = GlobalCatalogManager()
     corpus_all = get_sample_enterprise_corpus()
     for concept in corpus_all:
         catalog_manager.add_concept(concept)
     catalog_manager.save_to_disk("./data")
-    print(f"       ✓ Aggregated {len(catalog_manager.entries)} catalog entries across all connectors into data/global_index.md & data/global_log.md")
+    print(f"       ✓ Aggregated {len(catalog_manager.entries)} catalog entries across all connectors into data/global_index.md, data/global_index.toon & data/global_log.md")
 
     print("🔍 [6/6] Initializing Multi-Modal Retrievers & RRF Fusion Engine...")
     catalog_retriever = CatalogRetriever(
@@ -689,9 +697,12 @@ def setup_live_pipeline(
         tool_registry=tool_registry,
         reranker=reranker,
         checkpointer=checkpointer,
+        global_catalog_manager=catalog_manager,
+        graph_retriever=graph_retriever,
         enable_reranking=True,
         max_turns=max_turns,
         max_retrieval_attempts=3,
+        context_format=context_format,
     )
 
     return planner, hybrid_retriever
@@ -803,13 +814,17 @@ def run_interactive_repl(planner: LangGraphAgentPlanner) -> None:
     print("\n" + "=" * 80)
     print("💬 INTERACTIVE ENTERPRISE KNOWLEDGE AGENT REPL")
     print("   Type your questions below.")
-    print("   Special commands:")
+    print("   Session Commands:")
     print("     • 'role <role_name>'   - Switch active security persona (e.g. engineer, ciso_admin, guest)")
     print("     • 'thread <thread_id>' - Switch active conversation thread/session")
-    print("     • 'threads'            - List all saved conversation threads in storage")
+    print("     • 'threads'            - List all saved conversation threads in SQLite storage")
     print("     • 'new'                - Start a fresh conversation thread")
     print("     • 'history'            - Display message history for current thread")
     print("     • 'exit' or 'quit'     - Exit REPL")
+    print("   Query Scope Modifiers:")
+    print("     • '@enterprise <query>' - Force enterprise retrieval tools across connectors")
+    print("     • '@general <query>'    - Direct LLM conceptual/meta answer (0 tools, 0s retrieval)")
+    print("     • '@<connector> <query>' - Target specific source (e.g. @jira, @github, @dropbox)")
     print("=" * 80)
 
     current_role = "engineer"
@@ -946,6 +961,7 @@ def main() -> None:
     parser.add_argument("--neo4j-password", default=os.getenv("NEO4J_PASSWORD", None), help="Neo4j password (optional: falls back to in-memory graph)")
     parser.add_argument("--neo4j-database", default=os.getenv("NEO4J_DATABASE", "neo4j"), help="Neo4j database name (default: neo4j)")
     parser.add_argument("--max-turns", type=int, default=10, help="Maximum agent reflection turns (default: 10)")
+    parser.add_argument("--context-format", default="standard", choices=["standard", "toon"], help="Evidence context formatting ('standard' or 'toon') (default: standard)")
     parser.add_argument("--interactive", action="store_true", help="Launch interactive REPL mode after setup")
     args = parser.parse_args()
 
@@ -959,6 +975,7 @@ def main() -> None:
     print(f"   Vectors:   Qdrant ({args.qdrant_mode.upper()}) @ {storage_target}")
     print(f"   Graph:     {graph_target}")
     print(f"   Sessions:  Checkpointer ({args.checkpoint_mode.upper()}) @ {checkpoint_target}")
+    print(f"   Context:   {args.context_format.upper()} format")
     print(f"   Turns:     Max {args.max_turns} agent turns")
     print("=" * 80)
 
@@ -978,6 +995,7 @@ def main() -> None:
             llm_provider_name=args.provider,
             llm_model=args.model,
             max_turns=args.max_turns,
+            context_format=args.context_format,
         )
     except Exception as e:
         print(f"\n❌ Error initializing pipeline: {e}")

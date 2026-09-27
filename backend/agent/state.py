@@ -55,7 +55,7 @@ class AgentState(TypedDict):
 
 def trim_conversation_history(
     messages: List[Any],
-    max_messages: int = 20,
+    max_messages: int = 50,
 ) -> List[Any]:
     """
     Trims long conversation message histories using a sliding window to prevent

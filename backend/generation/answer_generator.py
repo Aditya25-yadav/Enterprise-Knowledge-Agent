@@ -28,16 +28,23 @@ Strict Grounding & Citation Rules:
 3. No External Citations: NEVER invent external citations, standards, textbooks, government agencies (e.g. NIST, FEMA, ISO, AWS external links), or unindexed URLs.
 4. Procedures: When explaining runbooks or workflows, present the exact steps from the evidence in their correct sequential order.
 5. Missing Information: If the provided evidence does not contain sufficient information to answer the question, state: "The provided enterprise documentation does not contain information regarding this request." Do NOT make up steps or policies.
+6. Conflict & Supersession Awareness: If the evidence contains conflicting facts or indicates that an earlier document/RFC has been superseded by a newer PR, post-mortem, or commit (e.g. timeout changed from 10s to 60s), explicitly note the supersession and identify the authoritative active version.
 """
 
-    def __init__(self, llm_provider: Optional[LLMProvider] = None) -> None:
+    def __init__(
+        self,
+        llm_provider: Optional[LLMProvider] = None,
+        context_format: str = "standard",
+    ) -> None:
         self.llm_provider = llm_provider or get_llm_provider()
+        self.context_format = context_format
 
     def generate_answer(
         self,
         query: str,
         chunks: List[Dict[str, Any]],
         conversation_history: Optional[List[Message]] = None,
+        context_format: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Generates a grounded final answer for the user query using retrieved chunks.
@@ -49,7 +56,8 @@ Strict Grounding & Citation Rules:
                 "chunks_used": 0,
             }
 
-        context_str, citations = ContextBuilder.build_context(chunks)
+        fmt = context_format or self.context_format
+        context_str, citations = ContextBuilder.build_context(chunks, format=fmt)
 
         user_content = f"""USER QUESTION:
 {query}

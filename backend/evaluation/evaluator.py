@@ -46,6 +46,8 @@ You must rigorously evaluate three things:
    - If the evidence is relevant but missing specific facts/links or is only at catalog/index level -> recommended_action = "RETRIEVE_MORE"
    - If the evidence is mostly irrelevant or off-topic -> recommended_action = "REFORMULATE"
 
+4. Conflict & Supersession Awareness: If retrieved evidence chunks contain conflicting facts (e.g. older RFC timeouts vs newer PR hotfixes), note the supersession and identify the authoritative source in your reasoning.
+
 Recommended tools when action is RETRIEVE_MORE or REFORMULATE:
 - "hybrid_search": Preferred retrieval tool to find specific passages, runbooks, SOPs, and error troubleshooting across all platforms with semantic vector + BM25 ranking.
 - "github_entity_search": For PR details, commit authors, code contributors, team repo access, issue-to-PR links.
@@ -78,8 +80,13 @@ You MUST respond strictly with a valid JSON object in the following format:
 ```
 """
 
-    def __init__(self, llm_provider: Optional[LLMProvider] = None) -> None:
+    def __init__(
+        self,
+        llm_provider: Optional[LLMProvider] = None,
+        context_format: str = "standard",
+    ) -> None:
         self.llm_provider = llm_provider or get_llm_provider()
+        self.context_format = context_format
 
     def evaluate_evidence(
         self,
@@ -87,6 +94,7 @@ You MUST respond strictly with a valid JSON object in the following format:
         chunks: List[Dict[str, Any]],
         conversation_history: Optional[List[Message]] = None,
         current_subgoal: Optional[str] = None,
+        context_format: Optional[str] = None,
     ) -> EvaluationResult:
         """
         Evaluates the relevance, completeness, and sufficiency of retrieved evidence.
@@ -104,7 +112,8 @@ You MUST respond strictly with a valid JSON object in the following format:
                 reasoning="No evidence chunks were retrieved during the previous tool execution turn.",
             )
 
-        context_str, _ = ContextBuilder.build_context(chunks)
+        fmt = context_format or self.context_format
+        context_str, _ = ContextBuilder.build_context(chunks, format=fmt)
 
         user_content = f"""USER QUESTION:
 {query}

@@ -48,6 +48,11 @@ class CatalogEntry:
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
 
+    def to_toon(self, index: Optional[int] = None) -> str:
+        """Serializes this catalog entry to compact TOON format."""
+        from backend.serialization.toon import serialize_toon_catalog_entry
+        return serialize_toon_catalog_entry(self, index=index)
+
 
 @dataclass
 class CatalogLogEvent:
@@ -300,6 +305,73 @@ class GlobalCatalogManager:
 
         return "\n".join(lines)
 
+    def generate_global_index_toon(self) -> str:
+        """
+        Renders the complete global master index into high-density TOON format,
+        compressing manifest metadata to minimize prompt tokens.
+        """
+        now_str = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+        lines = [
+            f"# Enterprise Knowledge Global Master Index (TOON v0.2) | Generated: {now_str}",
+            f"> Total Assets: {len(self.entries)}",
+            "",
+        ]
+        for idx, entry in enumerate(sorted(self.entries.values(), key=lambda e: (e.domain, e.title)), 1):
+            lines.append(entry.to_toon(index=idx))
+            lines.append("")
+
+        return "\n".join(lines).strip()
+
+    def generate_domain_topology_toon(self) -> str:
+        """
+        Renders an ultra-compact Domain Topology Map in TOON Tabular Array format,
+        collapsing large numbers of assets into fixed-size domain summaries (<=200-300 tokens).
+        """
+        from backend.serialization.toon import serialize_toon_table
+
+        domains: Dict[str, Dict[str, Any]] = {}
+        for entry in self.entries.values():
+            d = entry.domain or "Core Engineering"
+            if d not in domains:
+                domains[d] = {
+                    "domain": d,
+                    "doc_count": 0,
+                    "connectors": set(),
+                    "top_entities": set(),
+                }
+            domains[d]["doc_count"] += 1
+            if entry.source:
+                domains[d]["connectors"].add(entry.source)
+            for entity in (entry.key_entities or [])[:3]:
+                domains[d]["top_entities"].add(entity)
+
+        rows = []
+        for d_name, d_data in sorted(domains.items()):
+            rows.append({
+                "domain": d_name,
+                "doc_count": d_data["doc_count"],
+                "connectors": ",".join(sorted(d_data["connectors"])),
+                "primary_topics": ", ".join(list(d_data["top_entities"])[:5]) or d_name,
+            })
+
+        table_str = serialize_toon_table(rows, name="domains", fields=["domain", "doc_count", "connectors", "primary_topics"])
+        return f"[ENTERPRISE DOMAIN TOPOLOGY (TOON v0.2)]\n{table_str}"
+
+    def get_adaptive_global_manifest(self, max_tokens: int = 400) -> str:
+        """
+        Returns an adaptive global manifest suitable for zero-shot prompt injection.
+        - Uses detailed document-level TOON table if corpus <= 30 docs and <= max_tokens.
+        - Automatically collapses into Domain Topology Map for larger corpus.
+        """
+        from backend.serialization.toon import estimate_token_count
+
+        if len(self.entries) <= 30:
+            doc_manifest = self.generate_global_index_toon()
+            if estimate_token_count(doc_manifest) <= max_tokens:
+                return doc_manifest
+
+        return self.generate_domain_topology_toon()
+
     def generate_global_log_markdown(self) -> str:
         """
         Renders the global sync and update ledger with precise microsecond/second UTC ISO timestamps.
@@ -336,16 +408,19 @@ class GlobalCatalogManager:
         self,
         index_path: Optional[str] = None,
         log_path: Optional[str] = None,
+        save_toon: bool = True,
     ) -> tuple[str, str]:
-        """Writes global_index.md and global_log.md to disk."""
+        """Writes global_index.md, global_log.md, and optionally global_index.toon to disk."""
         if index_path and (Path(index_path).is_dir() or not index_path.endswith(".md")):
             target_dir = Path(index_path)
             target_dir.mkdir(parents=True, exist_ok=True)
             target_index = str(target_dir / "global_index.md")
             target_log = str(target_dir / "global_log.md") if not log_path else log_path
+            target_toon = str(target_dir / "global_index.toon")
         else:
             target_index = index_path or self.index_path
             target_log = log_path or self.log_path
+            target_toon = str(Path(target_index).with_suffix(".toon"))
 
         Path(target_index).parent.mkdir(parents=True, exist_ok=True)
         Path(target_log).parent.mkdir(parents=True, exist_ok=True)
@@ -355,6 +430,10 @@ class GlobalCatalogManager:
 
         with open(target_log, "w", encoding="utf-8") as f:
             f.write(self.generate_global_log_markdown())
+
+        if save_toon:
+            with open(target_toon, "w", encoding="utf-8") as f:
+                f.write(self.generate_global_index_toon())
 
         return target_index, target_log
 

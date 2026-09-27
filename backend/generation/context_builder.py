@@ -2,12 +2,15 @@
 Evidence Context Builder for Enterprise Knowledge Generation.
 
 Formats retrieved chunks into clean, structured, citation-ready context blocks
-for the LLM reasoning and answer generation prompts.
+for the LLM reasoning and answer generation prompts, supporting both standard Markdown
+and high-density TOON (Token-Oriented Object Notation) formats.
 """
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Literal, Tuple
+
+from backend.serialization.toon import serialize_toon_context
 
 
 class ContextBuilder:
@@ -16,25 +19,44 @@ class ContextBuilder:
     """
 
     @staticmethod
-    def build_context(chunks: List[Dict[str, Any]]) -> Tuple[str, List[Dict[str, str]]]:
+    def build_context(
+        chunks: List[Dict[str, Any]],
+        format: Literal["standard", "toon"] = "standard",
+    ) -> Tuple[str, List[Dict[str, Any]]]:
         """
         Builds numbered evidence context string and a list of citation source references.
+
+        Args:
+            chunks: List of candidate chunk dictionaries.
+            format: "standard" (Markdown) or "toon" (Token-Oriented Object Notation).
+
         Returns:
-          (context_string, citations_list)
+            (context_string, citations_list)
+        """
+        if format == "toon":
+            return ContextBuilder.build_toon_context(chunks)
+        return ContextBuilder.build_standard_context(chunks)
+
+    @staticmethod
+    def build_standard_context(
+        chunks: List[Dict[str, Any]],
+    ) -> Tuple[str, List[Dict[str, Any]]]:
+        """
+        Builds human-readable standard Markdown evidence context.
         """
         if not chunks:
             return "No relevant enterprise documents found.", []
 
         context_lines: List[str] = []
-        citations: List[Dict[str, str]] = []
+        citations: List[Dict[str, Any]] = []
 
         for idx, chunk in enumerate(chunks, 1):
-            source = chunk.get("source", "doc").upper()
-            title = chunk.get("title", "Untitled")
-            url = chunk.get("url", "")
+            source = str(chunk.get("source", "doc")).upper()
+            title = str(chunk.get("title", "Untitled"))
+            url = str(chunk.get("url", ""))
             path_list = chunk.get("section_path", [])
-            path_str = " > ".join(path_list) if path_list else chunk.get("section_heading", "")
-            text = chunk.get("text", "").strip()
+            path_str = " > ".join(str(p) for p in path_list) if path_list else str(chunk.get("section_heading", ""))
+            text = str(chunk.get("text", "")).strip()
 
             header = f"[{idx}] [{source}] {title}"
             if path_str:
@@ -63,3 +85,13 @@ class ContextBuilder:
             })
 
         return "\n".join(context_lines).strip(), citations
+
+    @staticmethod
+    def build_toon_context(
+        chunks: List[Dict[str, Any]],
+    ) -> Tuple[str, List[Dict[str, Any]]]:
+        """
+        Builds high-density TOON (Token-Oriented Object Notation) evidence context,
+        reducing prompt overhead by 60-75% for LLM inference.
+        """
+        return serialize_toon_context(chunks, numbered=True)

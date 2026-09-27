@@ -45,6 +45,7 @@ from langchain_core.messages import (
 )
 from langgraph.graph import END, START, StateGraph
 
+from backend.agent.query_scope import parse_query_scope
 from backend.agent.reformulator import QueryReformulator
 from backend.agent.state import AgentState, trim_conversation_history
 from backend.agent.tools import ToolRegistry, create_default_tool_registry
@@ -147,21 +148,27 @@ Guidelines for Tool Selection:
         query_reformulator: Optional[QueryReformulator] = None,
         reranker: Optional[CrossEncoderReranker] = None,
         checkpointer: Optional[Any] = None,
+        global_catalog_manager: Optional[Any] = None,
+        graph_retriever: Optional[Any] = None,
         enable_reranking: bool = True,
         rerank_threshold: float = 0.0,
         max_turns: int = 10,
         max_retrieval_attempts: int = 3,
-        max_history_messages: int = 20,
+        max_history_messages: int = 50,
+        context_format: str = "standard",
     ) -> None:
+        self.context_format = context_format
         self.llm_provider = llm_provider or get_llm_provider()
         self.tool_registry = tool_registry or create_default_tool_registry()
-        self.answer_generator = answer_generator or AnswerGenerator(llm_provider=self.llm_provider)
-        self.evidence_evaluator = evidence_evaluator or EvidenceEvaluator(llm_provider=self.llm_provider)
+        self.answer_generator = answer_generator or AnswerGenerator(llm_provider=self.llm_provider, context_format=context_format)
+        self.evidence_evaluator = evidence_evaluator or EvidenceEvaluator(llm_provider=self.llm_provider, context_format=context_format)
         self.query_reformulator = query_reformulator or QueryReformulator(llm_provider=self.llm_provider)
         self.enable_reranking = enable_reranking
         self.rerank_threshold = rerank_threshold
         self.reranker = reranker or (CrossEncoderReranker() if enable_reranking else None)
         self.checkpointer = checkpointer
+        self.global_catalog_manager = global_catalog_manager
+        self.graph_retriever = graph_retriever
         self.max_turns = max_turns
         self.max_retrieval_attempts = max_retrieval_attempts
         self.max_history_messages = max_history_messages
@@ -192,6 +199,21 @@ Guidelines for Tool Selection:
         "     inspect previous turns to resolve them into concrete entity names before issuing tool calls."
     )
 
+    def _get_reasoner_system_prompt(self) -> str:
+        """Constructs reasoner system prompt, dynamically appending adaptive global manifest if available."""
+        if not self.global_catalog_manager:
+            return self.REASONER_SYSTEM_PROMPT
+
+        manifest = ""
+        if hasattr(self.global_catalog_manager, "get_adaptive_global_manifest"):
+            manifest = self.global_catalog_manager.get_adaptive_global_manifest(max_tokens=400)
+        elif hasattr(self.global_catalog_manager, "generate_global_index_toon"):
+            manifest = self.global_catalog_manager.generate_global_index_toon()
+
+        if manifest:
+            return f"{self.REASONER_SYSTEM_PROMPT}\n\n[TOPOLOGICAL OVERVIEW]\n{manifest}"
+        return self.REASONER_SYSTEM_PROMPT
+
     def _reasoner_node(self, state: AgentState) -> Dict[str, Any]:
         """
         LLM Reasoner Step: Analyzes conversation state, reflection feedback, and available tools,
@@ -205,27 +227,37 @@ Guidelines for Tool Selection:
         trimmed_messages = trim_conversation_history(raw_messages, max_messages=self.max_history_messages)
         internal_messages = _to_internal_messages(trimmed_messages)
 
+        system_prompt = self._get_reasoner_system_prompt()
         if not internal_messages or internal_messages[0].role != MessageRole.SYSTEM:
-            internal_messages.insert(0, Message(role=MessageRole.SYSTEM, content=self.REASONER_SYSTEM_PROMPT))
+            internal_messages.insert(0, Message(role=MessageRole.SYSTEM, content=system_prompt))
+        else:
+            internal_messages[0] = Message(role=MessageRole.SYSTEM, content=system_prompt)
 
-        # Check if the query is a meta-conversational inquiry or greeting that should be answered directly without tool distraction
+        # Check if the query has an explicit scope modifier (@general, @enterprise, @jira, etc.)
         active_query = state.get("current_query") or state.get("query") or ""
         is_first_turn = (state.get("turn_count", 0) == 0)
         
+        cleaned_query, scope_directive, target_connector = parse_query_scope(active_query)
+        
         is_meta_query = False
         if is_first_turn and active_query:
-            import re
-            q_clean = active_query.strip().lower()
-            meta_patterns = [
-                r"\b(last|previous|earlier)\s+(question|message|query|prompt|turn)\b",
-                r"\bwhat\s+(was|were)\s+(the|my)\s+(last|previous|earlier)\b",
-                r"\bwhat\s+did\s+(i|we)\s+(ask|say|discuss|talk\s+about)\b",
-                r"\b(repeat|summarize)\s+(our\s+)?(chat|conversation|last\s+answer|previous\s+answer)\b",
-                r"^\s*(hello|hi|hey|greetings|good\s+(morning|afternoon|evening))\b",
-                r"^\s*(who\s+are\s+you|what\s+can\s+you\s+do|help)\s*\??$",
-            ]
-            if any(re.search(p, q_clean) for p in meta_patterns):
+            if scope_directive == "general":
                 is_meta_query = True
+            elif scope_directive == "enterprise":
+                is_meta_query = False
+            else:
+                import re
+                q_clean = active_query.strip().lower()
+                meta_patterns = [
+                    r"\b(last|previous|earlier)\s+(question|message|query|prompt|turn)\b",
+                    r"\bwhat\s+(was|were)\s+(the|my)\s+(last|previous|earlier)\b",
+                    r"\bwhat\s+did\s+(i|we)\s+(ask|say|discuss|talk\s+about)\b",
+                    r"\b(repeat|summarize)\s+(our\s+)?(chat|conversation|last\s+answer|previous\s+answer)\b",
+                    r"^\s*(hello|hi|hey|greetings|good\s+(morning|afternoon|evening))\b",
+                    r"^\s*(who\s+are\s+you|what\s+can\s+you\s+do|help)\s*\??$",
+                ]
+                if any(re.search(p, q_clean) for p in meta_patterns):
+                    is_meta_query = True
 
         if is_meta_query:
             raw_content = self.llm_provider.generate(internal_messages)
@@ -372,9 +404,13 @@ Guidelines for Tool Selection:
         if not chunks or not query:
             return {"rerank_applied": True, "rerank_scores": {}}
 
+        # Scaled retrieval depth based on context format
+        target_top_k = 15 if self.context_format == "toon" else 5
+
         reranked_results = self.reranker.rerank(
             query=query,
             chunks=chunks,
+            top_k=target_top_k,
             score_threshold=self.rerank_threshold,
         )
 
@@ -383,7 +419,18 @@ Guidelines for Tool Selection:
 
         # If threshold filtered everything out, preserve original chunks to prevent empty context
         if not reranked_chunks and chunks:
-            reranked_chunks = chunks
+            reranked_chunks = chunks[:target_top_k]
+
+        # Automatic Sequential Step & Procedure Expansion (Phase 2)
+        if self.graph_retriever and hasattr(self.graph_retriever, "expand_sequential_windows"):
+            user_context = state.get("user_context")
+            max_total = 25 if self.context_format == "toon" else 10
+            reranked_chunks = self.graph_retriever.expand_sequential_windows(
+                chunks=reranked_chunks,
+                window_size=1,
+                user_context=user_context,
+                max_total_chunks=max_total,
+            )
 
         return {
             "retrieved_chunks": reranked_chunks,
