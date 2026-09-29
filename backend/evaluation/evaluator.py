@@ -39,18 +39,22 @@ Your job is to inspect retrieved evidence chunks against a user question before 
 
 You must rigorously evaluate three things:
 1. Relevance: Does each chunk contain information relevant to the question? (score 0.0 to 1.0)
-2. Sufficiency: Do the retrieved chunks contain ENOUGH complete facts and relationship links to answer the ENTIRE question without guessing or hallucinating?
+2. Sufficiency: Do the retrieved chunks contain ENOUGH complete facts, details, and relationship links to answer the ENTIRE question without guessing or hallucinating?
+   - NOTE ON CATALOG DISCOVERY & INDEX SUMMARIES: If the retrieved chunks ONLY contain high-level catalog summaries, discovery manifests, or index metadata (chunks labeled [CATALOG DISCOVERY SUMMARY] or is_catalog=true), but lack the full document body, exact runbook steps, commit diffs, ticket descriptions, or complete facts required by the question, the evidence is INSUFFICIENT. You MUST mark `evidence_sufficient: false` and `recommended_action: "RETRIEVE_MORE"`, specifying the recommended deep retrieval tool (e.g., hybrid_search, github_entity_search, resource_lookup, keyword_search) suggested by the catalog match.
 3. Gap Identification & Next Action:
-   - If the evidence is completely sufficient -> recommended_action = "GENERATE"
-   - If the evidence is relevant but missing specific facts/links -> recommended_action = "RETRIEVE_MORE"
+   - If the evidence is completely sufficient with full document/entity content -> recommended_action = "GENERATE"
+   - If the evidence is relevant but missing specific facts/links or is only at catalog/index level -> recommended_action = "RETRIEVE_MORE"
    - If the evidence is mostly irrelevant or off-topic -> recommended_action = "REFORMULATE"
 
+4. Conflict & Supersession Awareness: If retrieved evidence chunks contain conflicting facts (e.g. older RFC timeouts vs newer PR hotfixes), note the supersession and identify the authoritative source in your reasoning.
+
 Recommended tools when action is RETRIEVE_MORE or REFORMULATE:
+- "hybrid_search": Preferred retrieval tool to find specific passages, runbooks, SOPs, and error troubleshooting across all platforms with semantic vector + BM25 ranking.
 - "github_entity_search": For PR details, commit authors, code contributors, team repo access, issue-to-PR links.
+- "resource_lookup": For full sequential document or specific file lookups by URL/URI or Jira ticket ID (e.g. PAY-928).
+- "keyword_search": For exact error codes, ticket IDs, and specific identifiers.
 - "graph_traversal": For parent-child hierarchy navigation and procedural runbook steps.
-- "resource_lookup": For full document or specific file lookups by URL/URI.
-- "keyword_search": For exact error codes, ticket IDs (e.g. PAY-928), and specific identifiers.
-- "semantic_search": For high-level conceptual questions, architectural overviews, and policy runbooks.
+- "catalog_discovery": To explore the global master index across platforms if initial direction is completely unknown.
 
 You MUST respond strictly with a valid JSON object in the following format:
 ```json
@@ -62,7 +66,7 @@ You MUST respond strictly with a valid JSON object in the following format:
   ],
   "unsupported_claims": [],
   "recommended_action": "RETRIEVE_MORE",
-  "recommended_tool": "github_entity_search",
+  "recommended_tool": "hybrid_search",
   "chunk_evaluations": [
     {
       "chunk_id": "chunk_1",
@@ -71,13 +75,18 @@ You MUST respond strictly with a valid JSON object in the following format:
       "reason": "Explains payment service ownership."
     }
   ],
-  "reasoning": "We identified the owning team, but we lack evidence of other projects that team supports."
+  "reasoning": "Catalog summary found matching runbook, but full document body must be fetched."
 }
 ```
 """
 
-    def __init__(self, llm_provider: Optional[LLMProvider] = None) -> None:
+    def __init__(
+        self,
+        llm_provider: Optional[LLMProvider] = None,
+        context_format: str = "standard",
+    ) -> None:
         self.llm_provider = llm_provider or get_llm_provider()
+        self.context_format = context_format
 
     def evaluate_evidence(
         self,
@@ -85,6 +94,7 @@ You MUST respond strictly with a valid JSON object in the following format:
         chunks: List[Dict[str, Any]],
         conversation_history: Optional[List[Message]] = None,
         current_subgoal: Optional[str] = None,
+        context_format: Optional[str] = None,
     ) -> EvaluationResult:
         """
         Evaluates the relevance, completeness, and sufficiency of retrieved evidence.
@@ -97,12 +107,13 @@ You MUST respond strictly with a valid JSON object in the following format:
                 missing_information=[query],
                 unsupported_claims=[],
                 recommended_action=RecommendedAction.RETRIEVE_MORE.value,
-                recommended_tool="semantic_search",
+                recommended_tool="catalog_discovery",
                 chunk_evaluations=[],
                 reasoning="No evidence chunks were retrieved during the previous tool execution turn.",
             )
 
-        context_str, _ = ContextBuilder.build_context(chunks)
+        fmt = context_format or self.context_format
+        context_str, _ = ContextBuilder.build_context(chunks, format=fmt)
 
         user_content = f"""USER QUESTION:
 {query}
@@ -151,7 +162,21 @@ Evaluate the evidence above for answering the user question. Return ONLY a valid
 
         try:
             parsed = json.loads(cleaned_text)
-            return EvaluationResult.from_dict(parsed)
+            eval_result = EvaluationResult.from_dict(parsed)
+
+            # Check if all chunks are catalog entries
+            all_catalog = bool(chunks) and all(c.get("is_catalog") or c.get("source") == "catalog" for c in chunks)
+            if all_catalog and eval_result.evidence_sufficient:
+                # Force RETRIEVE_MORE if only high-level catalog summaries exist
+                first_rec_tool = chunks[0].get("recommended_tool") or "resource_lookup"
+                eval_result.evidence_sufficient = False
+                eval_result.recommended_action = RecommendedAction.RETRIEVE_MORE.value
+                eval_result.recommended_tool = eval_result.recommended_tool or first_rec_tool
+                if not eval_result.missing_information:
+                    eval_result.missing_information = ["Full document contents and detailed evidence needed from catalog matches."]
+                eval_result.reasoning = (eval_result.reasoning or "") + " (Catalog manifest identified targets; full document retrieval required.)"
+
+            return eval_result
         except Exception as e:
             logger.warning(f"Failed to parse LLM evaluation JSON ({e}). Raw response: {response_text[:200]}...")
             return self._heuristic_fallback(chunks, response_text)
@@ -160,34 +185,46 @@ Evaluate the evidence above for answering the user question. Return ONLY a valid
         """Deterministic heuristic fallback when JSON parsing fails."""
         has_chunks = len(chunks) > 0
         upper_text = raw_text.upper()
+        all_catalog = has_chunks and all(c.get("is_catalog") or c.get("source") == "catalog" for c in chunks)
 
-        if "INSUFFICIENT" in upper_text or "RETRIEVE_MORE" in upper_text or not has_chunks:
+        if all_catalog:
             action = RecommendedAction.RETRIEVE_MORE.value
             sufficient = False
+            rec_tool = chunks[0].get("recommended_tool") or "resource_lookup"
+            missing = ["Full document contents and detailed evidence needed from catalog matches."]
+        elif "INSUFFICIENT" in upper_text or "RETRIEVE_MORE" in upper_text or not has_chunks:
+            action = RecommendedAction.RETRIEVE_MORE.value
+            sufficient = False
+            rec_tool = "semantic_search"
+            missing = ["Additional context needed."]
         elif "REFORMULATE" in upper_text:
             action = RecommendedAction.REFORMULATE.value
             sufficient = False
+            rec_tool = "semantic_search"
+            missing = ["Query reformulation needed."]
         else:
             action = RecommendedAction.GENERATE.value
             sufficient = True
+            rec_tool = None
+            missing = []
 
         chunk_evals = [
             ChunkRelevance(
                 chunk_id=c.get("chunk_id", f"chunk_{i}"),
-                score=0.8 if sufficient else 0.5,
+                score=0.85 if c.get("is_catalog") else (0.8 if sufficient else 0.5),
                 is_relevant=True,
-                reason="Evaluated via fallback heuristics.",
+                reason="Catalog summary match." if c.get("is_catalog") else "Evaluated via fallback heuristics.",
             )
             for i, c in enumerate(chunks, 1)
         ]
 
         return EvaluationResult(
-            relevance_score=0.8 if sufficient else 0.5,
+            relevance_score=0.85 if all_catalog else (0.8 if sufficient else 0.5),
             evidence_sufficient=sufficient,
-            missing_information=[] if sufficient else ["Additional context needed."],
+            missing_information=missing,
             unsupported_claims=[],
             recommended_action=action,
-            recommended_tool="semantic_search" if not sufficient else None,
+            recommended_tool=rec_tool,
             chunk_evaluations=chunk_evals,
             reasoning=f"Heuristic fallback: {raw_text[:120]}...",
         )

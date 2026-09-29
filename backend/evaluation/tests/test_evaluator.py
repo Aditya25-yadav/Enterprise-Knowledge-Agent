@@ -224,6 +224,42 @@ class TestEvidenceEvaluator(unittest.TestCase):
         self.assertEqual(result.recommended_action, "RETRIEVE_MORE")
         self.assertIn("Heuristic fallback", result.reasoning)
 
+    def test_07_extra_fields_in_chunk_evaluations_tolerated(self) -> None:
+        raw_json_with_extra_fields = """```json
+{
+  "relevance_score": 0.9,
+  "evidence_sufficient": false,
+  "missing_information": ["Full details on database failure"],
+  "unsupported_claims": [],
+  "recommended_action": "RETRIEVE_MORE",
+  "recommended_tool": "resource_lookup",
+  "chunk_evaluations": [
+    {
+      "chunk_id": "chunk_1",
+      "score": 0.9,
+      "is_relevant": true,
+      "is_sufficient": false,
+      "unexpected_extra_field": "some_value",
+      "reason": "Matches topic"
+    }
+  ],
+  "reasoning": "Need full procedures"
+}
+```"""
+        mock_llm = MockEvaluatorLLM(raw_text=raw_json_with_extra_fields)
+        evaluator = EvidenceEvaluator(llm_provider=mock_llm)
+
+        result = evaluator.evaluate_evidence(
+            query="What are database failure procedures?",
+            chunks=self.sample_chunks,
+        )
+
+        self.assertFalse(result.evidence_sufficient)
+        self.assertEqual(result.recommended_action, "RETRIEVE_MORE")
+        self.assertEqual(len(result.chunk_evaluations), 1)
+        self.assertEqual(result.chunk_evaluations[0].chunk_id, "chunk_1")
+        self.assertEqual(result.chunk_evaluations[0].score, 0.9)
+
 
 if __name__ == "__main__":
     unittest.main()

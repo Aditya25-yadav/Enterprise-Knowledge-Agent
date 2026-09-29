@@ -11,6 +11,7 @@ import json
 from typing import Any, Callable, Dict, List, Optional
 
 from backend.llm.base import ToolDefinition
+from backend.retrieval.catalog import CatalogRetriever
 from backend.retrieval.entity_graph import EntityGraphRetriever
 from backend.retrieval.graph import GraphRetriever
 from backend.retrieval.hybrid import HybridRetriever
@@ -83,17 +84,20 @@ def create_default_tool_registry(
     graph_retriever: Optional[GraphRetriever] = None,
     entity_graph_retriever: Optional[EntityGraphRetriever] = None,
     hybrid_retriever: Optional[HybridRetriever] = None,
+    catalog_retriever: Optional[CatalogRetriever] = None,
 ) -> ToolRegistry:
     """
     Creates and populates the standard ToolRegistry with all enterprise retrieval tools:
-    1. `hybrid_search`: Unified multi-modal fusion search combining vector, BM25, and graph via RRF.
-    2. `semantic_search`: Dense vector search (concepts, guides, policies).
-    3. `keyword_search`: Sparse BM25+ search (exact IDs, error codes, symbols).
-    4. `resource_lookup`: Direct lookup by canonical URI/URL to fetch full documents.
-    5. `graph_traversal`: Parent-child hierarchy navigation & sibling expansion.
-    6. `github_entity_search`: Developer intelligence, PRs, commits, reviews & graph paths.
+    1. `catalog_discovery`: PRIMARY MAP-FIRST DISCOVERY TOOL across all 6 platforms.
+    2. `hybrid_search`: Unified multi-modal fusion search combining vector, BM25, and graph via RRF.
+    3. `semantic_search`: Dense vector search (concepts, guides, policies).
+    4. `keyword_search`: Sparse BM25+ search (exact IDs, error codes, symbols).
+    5. `resource_lookup`: Direct lookup by canonical URI/URL to fetch full documents.
+    6. `graph_traversal`: Parent-child hierarchy navigation & sibling expansion.
+    7. `github_entity_search`: Developer intelligence, PRs, commits, reviews & graph paths.
     """
     registry = ToolRegistry()
+    cat_retriever = catalog_retriever or CatalogRetriever()
     sem_retriever = semantic_retriever or SemanticRetriever()
     shared_vector_store = getattr(sem_retriever, "vector_store", None)
     shared_bm25 = getattr(keyword_retriever, "bm25_index", None) or (
@@ -120,6 +124,53 @@ def create_default_tool_registry(
         graph_retriever=grp_retriever,
     )
 
+    # ── 0. Catalog Discovery Tool (Map-First Navigation) ──────────────────────
+    catalog_discovery_def = ToolDefinition(
+        name="catalog_discovery",
+        description=(
+            "Inspect the Global Master Index (global_index.md) and knowledge sync ledger (global_log.md) across all 6 "
+            "platforms (GitHub, Jira, Notion, Dropbox, Gmail, Confluence) to discover relevant enterprise assets, runbooks, "
+            "PRs, and tickets for enterprise-specific queries. DO NOT use for general definitions or conversation history."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Natural language question, topic, system name, or entity keywords to discover across the global index.",
+                },
+                "domain": {
+                    "type": "string",
+                    "description": "Optional domain filter (e.g. 'Payments & Checkout', 'Infrastructure & Disaster Recovery', 'Security & Cryptography', 'Data Platform & Messaging', 'Incident Response & Reliability').",
+                },
+                "connector": {
+                    "type": "string",
+                    "description": "Optional source platform filter ('github', 'jira', 'notion', 'dropbox', 'gmail', 'confluence').",
+                    "enum": ["github", "jira", "notion", "dropbox", "gmail", "confluence"],
+                },
+            },
+            "required": ["query"],
+        },
+    )
+
+    def handle_catalog_discovery(
+        arguments: Optional[Dict[str, Any]] = None,
+        user_context: Optional[Dict[str, Any]] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        args = dict(arguments or {})
+        args.update(kwargs)
+        query = str(args.get("query") or "")
+        domain = args.get("domain")
+        connector = args.get("connector")
+
+        return cat_retriever.discover(
+            query=query,
+            user_context=user_context,
+            domain=domain,
+            connector=connector,
+        )
+
     # ── 1. Semantic Search Tool ──────────────────────────────────────────────
     semantic_search_def = ToolDefinition(
         name="semantic_search",
@@ -136,12 +187,12 @@ def create_default_tool_registry(
                 },
                 "source": {
                     "type": "string",
-                    "description": "Optional filter by platform ('github', 'notion', 'dropbox', 'gmail', 'confluence', 'jira'). Leave empty to search all platforms.",
+                    "description": "DO NOT set or guess this parameter unless the user EXPLICITLY requested a specific platform in their query (e.g. 'search in Jira'). Omit or leave empty to search all platforms (RECOMMENDED).",
                     "enum": ["github", "notion", "dropbox", "gmail", "confluence", "jira"],
                 },
                 "resource_type": {
                     "type": "string",
-                    "description": "Optional filter by resource type ('repository', 'file', 'issue', 'page', 'email', 'playbook'). Leave empty to search all.",
+                    "description": "DO NOT set or guess this parameter unless the user EXPLICITLY asked for a specific type. Omit or leave empty to search all (RECOMMENDED).",
                 },
                 "top_k": {
                     "type": "integer",
@@ -193,12 +244,12 @@ def create_default_tool_registry(
                 },
                 "source": {
                     "type": "string",
-                    "description": "Optional filter by platform: 'github', 'notion', 'dropbox', 'gmail', 'confluence', 'jira'. Leave empty to search all.",
+                    "description": "DO NOT set or guess this parameter unless the user EXPLICITLY requested a specific platform in their query (e.g. 'search in Jira'). Omit or leave empty to search all platforms (RECOMMENDED).",
                     "enum": ["github", "notion", "dropbox", "gmail", "confluence", "jira"],
                 },
                 "resource_type": {
                     "type": "string",
-                    "description": "Optional filter by resource type: 'repository', 'file', 'issue', 'page', 'email', 'playbook'. Leave empty to search all.",
+                    "description": "DO NOT set or guess this parameter unless the user EXPLICITLY asked for a specific type. Omit or leave empty to search all (RECOMMENDED).",
                 },
                 "top_k": {
                     "type": "integer",
@@ -237,16 +288,17 @@ def create_default_tool_registry(
     resource_lookup_def = ToolDefinition(
         name="resource_lookup",
         description=(
-            "Retrieve complete text and metadata of a specific document, runbook, SOP, API specification, "
-            "or policy by its document title, topic name, canonical URI (e.g. 'github://...', 'https://...'), URL, "
-            "or chunk ID. Reconstructs the full document in sequential reading order with complete section paths."
+            "Retrieve the complete sequential text of a specific known document, runbook, or ticket by exact "
+            "document title, canonical URI (e.g. 'jira://issue/PAY-928', 'https://...'), URL, or document ID. "
+            "Use ONLY when you already know the specific document title or ticket key to read. "
+            "For general topic searching, finding relevant chunks, or broad inquiries, use hybrid_search instead."
         ),
         parameters={
             "type": "object",
             "properties": {
                 "resource_id": {
                     "type": "string",
-                    "description": "Document title (e.g. 'Disaster Recovery Runbook', 'Payments API Specification'), topic name, canonical URI, URL, or chunk ID to retrieve.",
+                    "description": "Exact document title, Jira ticket key (e.g. 'PAY-928'), canonical URI, URL, or chunk ID to retrieve in full.",
                 },
             },
             "required": ["resource_id"],
@@ -432,12 +484,12 @@ def create_default_tool_registry(
                 },
                 "source": {
                     "type": "string",
-                    "description": "Optional filter by platform ('github', 'notion', 'dropbox', 'gmail', 'confluence', 'jira'). Leave empty to search all platforms.",
+                    "description": "DO NOT set or guess this parameter unless the user EXPLICITLY requested a specific platform in their query (e.g. 'search in Jira'). Omit or leave empty to search all platforms (RECOMMENDED).",
                     "enum": ["github", "notion", "dropbox", "gmail", "confluence", "jira"],
                 },
                 "resource_type": {
                     "type": "string",
-                    "description": "Optional filter by resource type: 'repository', 'file', 'issue', 'page', 'email', 'playbook'. Leave empty to search all.",
+                    "description": "DO NOT set or guess this parameter unless the user EXPLICITLY asked for a specific type. Omit or leave empty to search all (RECOMMENDED).",
                 },
                 "top_k": {
                     "type": "integer",
@@ -489,6 +541,7 @@ def create_default_tool_registry(
             metadata_filters=metadata_filters if metadata_filters else None,
         )
 
+    registry.register(catalog_discovery_def, handle_catalog_discovery)
     registry.register(hybrid_search_def, handle_hybrid_search)
     registry.register(semantic_search_def, handle_semantic_search)
     registry.register(keyword_search_def, handle_keyword_search)

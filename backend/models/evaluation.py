@@ -27,6 +27,20 @@ class ChunkRelevance:
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
 
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "ChunkRelevance":
+        """Safely instantiates ChunkRelevance ignoring unexpected LLM JSON fields."""
+        if not isinstance(data, dict):
+            return cls(chunk_id=str(data))
+        valid_keys = {"chunk_id", "score", "is_relevant", "reason"}
+        filtered = {k: v for k, v in data.items() if k in valid_keys}
+        return cls(
+            chunk_id=str(filtered.get("chunk_id", "")),
+            score=float(filtered.get("score", 0.0)),
+            is_relevant=bool(filtered.get("is_relevant", True)),
+            reason=str(filtered.get("reason", "")),
+        )
+
 
 @dataclass
 class EvaluationResult:
@@ -58,7 +72,7 @@ class EvaluationResult:
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "EvaluationResult":
         chunk_evals = [
-            ChunkRelevance(**c) if isinstance(c, dict) else c
+            ChunkRelevance.from_dict(c) if isinstance(c, dict) else c
             for c in data.get("chunk_evaluations", [])
         ]
         return cls(

@@ -2,7 +2,7 @@
 """
 End-to-End Live Testing & Verification Script for Enterprise Knowledge Agent.
 
-Executes the complete pipeline using a Real Local LLM (Ollama / Local OpenAI endpoint):
+Executes the complete pipeline using Local LLMs (Ollama) or Cloud LLMs (Google Gemini):
   1. Loads / ingests data across all 6 Enterprise Connectors:
      - GitHub (Repos, PRs, Commits, Issues)
      - Jira (Tickets, Bug Reports, ADF)
@@ -10,23 +10,27 @@ Executes the complete pipeline using a Real Local LLM (Ollama / Local OpenAI end
      - Dropbox (Technical Runbooks, PDF/Office docs)
      - Gmail (Incident Emails, Status Threads)
      - Confluence (Engineering RFCs, SOPs)
-  2. Runs structure-preserving chunking (SmartOKFChunker).
-  3. Generates dense vector embeddings (LocalEmbedder) and builds Qdrant vector store.
-  4. Generates sparse BM25+ inverted index (BM25Index).
-  5. Builds Developer Property Graph (InMemoryEntityGraph).
-  6. Connects to Local LLM (OllamaProvider: qwen2.5 / llama3.1 / mistral-nemo).
-  7. Executes the 6-Node LangGraph Agent state machine with Hybrid Search (RRF),
-     Cross-Encoder Reranking, Self-RAG reflection, and grounded answer synthesis with citations.
+  2. Builds Map-First Global Master Index (global_index.md) and sync ledger (global_log.md).
+  3. Runs structure-preserving chunking (SmartOKFChunker).
+  4. Generates dense vector embeddings (LocalEmbedder) and builds Qdrant vector store.
+  5. Generates sparse BM25+ inverted index (BM25Index).
+  6. Builds Developer Property Graph (InMemoryEntityGraph or live Neo4j).
+  7. Connects to LLM Provider (Ollama: qwen2.5 / llama3.1 / mistral-nemo, or Gemini: gemini-2.5-flash / pro).
+  8. Executes the LangGraph Agent state machine with 7 specialized tools:
+     catalog_discovery, hybrid_search, semantic_search, keyword_search, resource_lookup,
+     graph_traversal, and github_entity_search.
+  9. Features Cross-Encoder Reranking, Self-RAG reflection, SQLite conversation thread persistence,
+     fast-path direct answering for meta/general queries, and query scope directives (@enterprise, @general, @<connector>).
 
 Usage:
     # Run automated test suite against local Ollama
-    python scripts/run_e2e_live.py
+    python scripts/run_e2e_live.py --provider ollama --model qwen2.5:7b
 
-    # Run with a specific model
-    python scripts/run_e2e_live.py --model qwen2.5:7b
+    # Run automated test suite against Google Gemini
+    python scripts/run_e2e_live.py --provider gemini --model gemini-2.5-flash
 
-    # Run in interactive chat mode
-    python scripts/run_e2e_live.py --interactive
+    # Run interactive chat REPL mode
+    python scripts/run_e2e_live.py --provider gemini --interactive
 """
 
 from __future__ import annotations
@@ -52,7 +56,10 @@ load_dotenv(dotenv_path=PROJECT_ROOT / ".env")
 os.environ.setdefault("HF_HUB_OFFLINE", "1")
 os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
+
 from backend.agent.langgraph_planner import LangGraphAgentPlanner
+from backend.agent.query_scope import parse_query_scope
 from backend.agent.tools import create_default_tool_registry
 from backend.connectors.confluence import ConfluenceConnector
 from backend.connectors.dropbox import DropboxConnector
@@ -60,6 +67,7 @@ from backend.connectors.email import GmailConnector
 from backend.connectors.github import GitHubConnector
 from backend.connectors.jira import JiraConnector
 from backend.connectors.notion import NotionConnector
+from backend.ingestion.catalog_aggregator import GlobalCatalogManager
 from backend.ingestion.embedder import LocalEmbedder
 from backend.ingestion.pipeline import IngestionPipeline
 from backend.llm.factory import get_llm_provider
@@ -76,6 +84,7 @@ from backend.models.graph import (
 )
 from backend.models.okf import OKFConcept, OKFPermissions
 from backend.ranking.reranker import CrossEncoderReranker
+from backend.retrieval.catalog import CatalogRetriever
 from backend.retrieval.entity_graph import EntityGraphRetriever, InMemoryEntityGraph
 from backend.retrieval.graph import GraphRetriever
 from backend.retrieval.hybrid import HybridRetriever
@@ -122,7 +131,9 @@ def get_sample_enterprise_corpus() -> List[OKFConcept]:
     Used as live test data when direct API credentials for a specific connector are unconfigured.
     """
     return [
-        # 1. GitHub: Code Architecture & API Specification
+        # =====================================================================
+        # 1. GITHUB (Repos, PRs, Architecture Specs, DevOps Manifests)
+        # =====================================================================
         OKFConcept(
             type="File",
             title="Payments API Specification & Idempotency Guide",
@@ -136,8 +147,41 @@ Authentication requires a Bearer JWT with `payments.write` scope.""",
             permissions=OKFPermissions(allowed_roles=["employee", "engineer"], is_public=False),
             extra_metadata={"source": "github", "resource_type": "file"},
         ),
+        OKFConcept(
+            type="File",
+            title="Kubernetes Ingress & Cert-Manager Let's Encrypt TLS Configuration",
+            resource="https://github.com/company/infra-k8s/blob/main/ingress/cert-manager-production.yaml",
+            body="""# Ingress Controller & Automated TLS Certificate Configuration
+All production Kubernetes clusters utilize NGINX Ingress Controller v1.9.4 with Cert-Manager v1.13.0 for automated TLS certificate issuance via Let's Encrypt ACME HTTP-01 challenge.
+ClusterIssuer configuration:
+- Issuer: `letsencrypt-production`
+- ACME Server: `https://acme-v02.api.letsencrypt.org/directory`
+- Private Key Secret: `letsencrypt-prod-account-key`
+- Solver: Ingress class `nginx-external` with auto-renew at 30 days before expiration.
+Traffic Routing Rule: Host headers must match `*.api.company.com` or `*.internal.company.com`. Default rate limit is configured at 500 req/s per client IP (`nginx.ingress.kubernetes.io/limit-rps: "500"`).""",
+            tags=["github", "kubernetes", "ingress", "cert-manager", "tls", "devops"],
+            permissions=OKFPermissions(allowed_roles=["employee", "engineer", "sre"], is_public=False),
+            extra_metadata={"source": "github", "resource_type": "file"},
+        ),
+        OKFConcept(
+            type="File",
+            title="OAuth 2.0 PKCE Authorization Server & Token Exchange Specification",
+            resource="https://github.com/company/auth-service/docs/oauth2-pkce-spec.md",
+            body="""# OAuth 2.0 with PKCE (Proof Key for Code Exchange) Specification
+For all public clients (Single-Page Applications and iOS/Android Mobile Apps), the standard OAuth 2.0 Authorization Code Grant MUST be paired with PKCE (RFC 7636).
+1. Client generates a cryptographically random `code_verifier` (43-128 characters, Base64URL-encoded).
+2. Client derives `code_challenge = BASE64URL(SHA256(code_verifier))` with `code_challenge_method = S256`. Plain method is strictly forbidden.
+3. Authorization endpoint: `https://auth.company.com/oauth/authorize`.
+4. Token endpoint: `https://auth.company.com/oauth/token` exchanges `code` and `code_verifier` for Access Token (JWT, 15-minute expiry) and Refresh Token (Rotating, 30-day sliding window).
+5. Token Revocation: Immediate blacklisting in Redis cluster on user logout via `/oauth/revoke`.""",
+            tags=["github", "auth", "oauth2", "pkce", "security", "jwt"],
+            permissions=OKFPermissions(allowed_roles=["employee", "engineer"], is_public=False),
+            extra_metadata={"source": "github", "resource_type": "file"},
+        ),
 
-        # 2. Jira: P0 Issue & Incident Resolution
+        # =====================================================================
+        # 2. JIRA (Tickets, Bug Reports, Infrastructure Rollouts)
+        # =====================================================================
         OKFConcept(
             type="Issue",
             title="PAY-928: 3DS Authentication Timeout in Checkout Flow",
@@ -151,8 +195,42 @@ Resolution: Resolved in PR #142 in payments repo. Timeout increased to 60s and r
             permissions=OKFPermissions(allowed_roles=["employee", "engineer"], is_public=False),
             extra_metadata={"source": "jira", "resource_type": "issue"},
         ),
+        OKFConcept(
+            type="Issue",
+            title="SEC-1104: Zero-Trust Cloudflare Access Tunnel & SSH Bastion Migration",
+            resource="https://jira.company.com/browse/SEC-1104",
+            body="""# SEC-1104: Zero-Trust Cloudflare Access Tunnel & SSH Bastion Migration
+Status: IN PROGRESS | Priority: P1 High | Assignee: devsecops-team | Fix Version: 2026.Q4
+Description: Decommission legacy open-port OpenVPN servers and migrate all internal developer tooling (Grafana, ArgoCD, Internal Admin UI) to Cloudflare Zero-Trust Tunnels (`cloudflared`).
+Architecture:
+- `cloudflared` daemon runs in HA mode (3 replicas) across Kubernetes management namespaces.
+- IdP Authentication: Enforced Okta SAML 2.0 with FIDO2 WebAuthn Hardware Keys mandatory for all employees.
+- SSH Access: Managed via Cloudflare Short-Lived Certificates (Ephemerally signed via Vault CA, TTL 60m).
+- Status: Grafana and ArgoCD migrated successfully. Staging bastion decommissioned on 2026-09-15.""",
+            tags=["jira", "security", "zero-trust", "cloudflare", "okta", "vpn"],
+            permissions=OKFPermissions(allowed_roles=["employee", "engineer", "secops", "sre"], is_public=False),
+            extra_metadata={"source": "jira", "resource_type": "issue"},
+        ),
+        OKFConcept(
+            type="Issue",
+            title="DATA-782: Real-Time Clickstream Analytics Pipeline using Flink and Iceberg",
+            resource="https://jira.company.com/browse/DATA-782",
+            body="""# DATA-782: Real-Time Clickstream Analytics Pipeline using Flink and Iceberg
+Status: RESOLVED | Priority: P1 High | Reporter: lead-data-engineer
+Problem: Clickstream batch ETL in BigQuery had an 8-hour latency, delaying real-time fraud detection and recommendation engine scoring.
+Solution Implemented:
+1. Real-time clickstream ingestion from Kafka (`prod.events.clickstream.v2`) into Apache Flink 1.18 streaming job.
+2. Flink performs 1-minute tumbling window aggregations with session deduplication via RocksDB StateBackend.
+3. Output sink writes directly to Apache Iceberg format on AWS S3, registered in AWS Glue Data Catalog.
+4. End-to-end event latency dropped from 8 hours to under 45 seconds (99.8% SLA met).""",
+            tags=["jira", "data", "flink", "iceberg", "kafka", "analytics"],
+            permissions=OKFPermissions(allowed_roles=["employee", "engineer"], is_public=False),
+            extra_metadata={"source": "jira", "resource_type": "issue"},
+        ),
 
-        # 3. Notion: Infrastructure & Secret Management (Restricted RBAC)
+        # =====================================================================
+        # 3. NOTION (Architecture Guides, Secret Vaults, Internal Policies)
+        # =====================================================================
         OKFConcept(
             type="Page",
             title="CISO Master KMS Encryption & Vault Infrastructure [TOP SECRET]",
@@ -166,8 +244,41 @@ Rotation Policy: Automated 90-day key rotation via AWS Secrets Manager.""",
             permissions=OKFPermissions(allowed_roles=["ciso_admin", "secops"], is_public=False),
             extra_metadata={"source": "notion", "resource_type": "page"},
         ),
+        OKFConcept(
+            type="Page",
+            title="New Engineer Workstation Setup & macOS Security Hardening Guide",
+            resource="https://notion.company.com/it/engineer-workstation-onboarding",
+            body="""# Engineering Laptop Setup & macOS Hardening Guide (2026 Edition)
+Welcome to Company Engineering! Follow these mandatory setup steps upon receiving your Apple Silicon MacBook Pro:
+1. MDM & Device Enrollment: Verify Jamf Pro profile enrollment under System Settings -> Privacy & Security -> Profiles.
+2. Disk Encryption: FileVault MUST be enabled immediately with institutional escrow key.
+3. Developer Toolchain:
+   - Homebrew: Run `/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"`
+   - Docker Desktop: Use Docker Desktop Enterprise 4.28+ with Rosetta 2 x86_64 emulation enabled.
+   - Git Signing: GPG key or SSH signing required for all Git commits (`git config --global commit.gpgsign true`).
+4. Endpoint Security: CrowdStrike Falcon sensor runs in background; do not kill daemon `com.crowdstrike.falcon.Agent`.""",
+            tags=["notion", "onboarding", "it", "security", "macos", "hardware"],
+            permissions=OKFPermissions(allowed_roles=["employee", "engineer"], is_public=False),
+            extra_metadata={"source": "notion", "resource_type": "page"},
+        ),
+        OKFConcept(
+            type="Page",
+            title="Internal AI Governance & LLM Data Protection Policy (v2.1)",
+            resource="https://notion.company.com/legal/ai-governance-policy",
+            body="""# Enterprise Generative AI & LLM Governance Policy
+Classification: Internal Company Policy | Effective Date: 2026-08-01 | Owner: Legal & CISO Office
+1. Permitted Models: Only approved enterprise-tier LLM endpoints (Self-Hosted Ollama instances, Azure OpenAI Enterprise tenant, Google Vertex AI Enterprise) may process proprietary source code or internal documents.
+2. Data Privacy & Zero Data Retention (ZDR): Public consumer AI web interfaces (e.g. consumer ChatGPT, Claude web) are STRICTLY PROHIBITED from receiving customer PII, internal passwords, API keys, or financial transaction data.
+3. Code Synthesis Review: All AI-generated production code must undergo mandatory human peer review and pass SAST (SonarQube) and SCA (Snyk) security scans before merging into `main`.
+4. Compliance Audit: Prompt/completion audit logs are retained for 365 days in encrypted cold storage for SOC2 Type II compliance.""",
+            tags=["notion", "ai", "governance", "policy", "ciso", "compliance"],
+            permissions=OKFPermissions(allowed_roles=["employee", "engineer", "legal", "ciso_admin"], is_public=False),
+            extra_metadata={"source": "notion", "resource_type": "page"},
+        ),
 
-        # 4. Dropbox: Technical Runbook & Disaster Recovery
+        # =====================================================================
+        # 4. DROPBOX (Technical Runbooks, PDF SOPs, FinOps Audits)
+        # =====================================================================
         OKFConcept(
             type="File",
             title="Disaster Recovery & Database Failover Runbook",
@@ -181,8 +292,45 @@ Step 4: Notify the #incident-response Slack channel with the failover timestamp 
             permissions=OKFPermissions(allowed_roles=["employee", "engineer", "sre"], is_public=False),
             extra_metadata={"source": "dropbox", "resource_type": "file"},
         ),
+        OKFConcept(
+            type="File",
+            title="OpenSearch 12-Node Production Cluster Reindexing & Zero-Downtime Migration SOP",
+            resource="https://dropbox.company.com/engineering/runbooks/opensearch_reindex_sop_2026.pdf",
+            body="""# OpenSearch Production Cluster Zero-Downtime Reindexing SOP
+Scope: Applied during schema updates, analyzer modifications, or major shard reallocation on the 12-node OpenSearch 2.11 cluster (`os-prod-cluster-01`).
+Step 1: Create the target index with updated mappings and optimal bulk index settings:
+  `PUT /product_catalog_v2 { "settings": { "number_of_shards": 6, "number_of_replicas": 0, "refresh_interval": "-1" } }`
+Step 2: Initiate async background reindex from source index to target index:
+  `POST /_reindex?wait_for_completion=false { "source": { "index": "product_catalog_v1" }, "dest": { "index": "product_catalog_v2" } }`
+Step 3: Monitor task progress: `GET /_tasks/<task_id>`. Verify document counts match.
+Step 4: Restore replication and refresh:
+  `PUT /product_catalog_v2/_settings { "number_of_replicas": 2, "refresh_interval": "1s" }`
+Step 5: Atomic Alias Switchover (Zero-Downtime):
+  `POST /_aliases { "actions": [ { "remove": { "index": "product_catalog_v1", "alias": "product_catalog_active" } }, { "add": { "index": "product_catalog_v2", "alias": "product_catalog_active" } } ] }`""",
+            tags=["dropbox", "opensearch", "elasticsearch", "database", "runbook", "sre"],
+            permissions=OKFPermissions(allowed_roles=["employee", "engineer", "sre"], is_public=False),
+            extra_metadata={"source": "dropbox", "resource_type": "file"},
+        ),
+        OKFConcept(
+            type="File",
+            title="Q3 2026 Cloud Infrastructure FinOps Audit & AWS/GCP Cost Reduction Report",
+            resource="https://dropbox.company.com/finance/finops/q3_2026_cloud_cost_audit.xlsx",
+            body="""# Q3 2026 Cloud Infrastructure FinOps Audit & Cost Reduction Report
+Prepared by: FinOps Engineering Group | Date: 2026-09-10
+Executive Summary: Total monthly cloud spend across AWS and GCP averaged $412,000 in Q2. Implementation of FinOps optimizations achieved a recurring 24.5% monthly savings ($101,000/mo reduction).
+Key Initiatives Completed:
+1. Compute Right-Sizing & Karpenter Autoscaling: Replaced legacy AWS Cluster Autoscaler with Karpenter on EKS, shifting 65% of stateless worker nodes to AWS Graviton3 (c7g/m7g) Spot Instances (saved $48,500/mo).
+2. S3 Intelligent-Tiering & Lifecycle Transitions: Moved 1.4 Petabytes of cold logging data from S3 Standard to S3 Glacier Instant Retrieval after 30 days (saved $22,300/mo).
+3. Unattached EBS & Idle NAT Gateways: Automated cleanup script terminated 142 unattached gp2/gp3 EBS volumes and consolidated redundant VPC NAT Gateways (saved $11,200/mo).
+4. 3-Year Compute Savings Plans: Committed $80,000/mo baseline to lock in 42% blended discount.""",
+            tags=["dropbox", "finops", "aws", "gcp", "cost-optimization", "finance"],
+            permissions=OKFPermissions(allowed_roles=["employee", "engineer", "finance", "leadership"], is_public=False),
+            extra_metadata={"source": "dropbox", "resource_type": "file"},
+        ),
 
-        # 5. Gmail: Incident Thread & Post-Mortem Communication
+        # =====================================================================
+        # 5. GMAIL (Incident Threads, Security Advisories, Tech Announcements)
+        # =====================================================================
         OKFConcept(
             type="Thread",
             title="[POST-MORTEM] 2026-09-20 Checkout 3DS Latency Spike",
@@ -198,8 +346,48 @@ Action items: Implement global circuit breaker (PAY-935) and update gateway time
             permissions=OKFPermissions(allowed_roles=["employee", "engineer"], is_public=False),
             extra_metadata={"source": "gmail", "resource_type": "email"},
         ),
+        OKFConcept(
+            type="Thread",
+            title="[SECURITY ADVISORY] CVE-2024-45678: Mandatory YubiKey 5 Series Firmware Patching",
+            resource="gmail://thread/sec_alert_yubikey_2026",
+            body="""Subject: [URGENT SECURITY ADVISORY] Action Required: YubiKey 5 Series Firmware Vulnerability (CVE-2024-45678)
+From: cso-security-operations@company.com
+To: all-employees@company.com
+Date: 2026-09-18 09:15:00 UTC
+All Staff,
+A critical side-channel vulnerability (CVE-2024-45678) has been disclosed affecting Infineon cryptographic microcontrollers in YubiKey 5 Series devices running firmware below version 5.7.0.
+Impact: An attacker with physical possession and specialized oscilloscope hardware could extract ECDSA private keys.
+Required Actions:
+1. Check your hardware key firmware via YubiKey Manager CLI: `ykman info`.
+2. If your firmware is between 5.0.0 and 5.6.8, submit an IT service desk ticket with tag `#YUBIKEY-REPLACE` for an immediate hardware swap with a pre-configured Series 5.7+ hardware key.
+3. Software 2FA (TOTP / SMS) remains disabled company-wide. Hardware FIDO2 is still the mandatory standard.""",
+            tags=["gmail", "security", "advisory", "yubikey", "cve", "ciso"],
+            permissions=OKFPermissions(allowed_roles=["employee", "engineer", "secops", "ciso_admin"], is_public=False),
+            extra_metadata={"source": "gmail", "resource_type": "email"},
+        ),
+        OKFConcept(
+            type="Thread",
+            title="[TECH ANNOUNCEMENT] Core Banking Services Migrating from REST/JSON to gRPC & Protobuf",
+            resource="gmail://thread/arch_grpc_migration_2026",
+            body="""Subject: [TECH ANNOUNCEMENT] Core Banking Services Migration to gRPC & Protobuf (v3.0)
+From: lead-architect@company.com
+To: engineering-leads@company.com
+Date: 2026-09-22 14:30:00 UTC
+Engineers,
+Effective 2026-10-15, all internal synchronous service-to-service communication between Ledger, Accounts, and Transfer services will transition from HTTP/1.1 REST to HTTP/2 gRPC with Protocol Buffers v3.
+Key Highlights:
+- Protobuf Repository: All `.proto` schemas must be defined in `github.com/company/proto-schema` and compiled using `buf` CLI.
+- Performance Gains: Benchmarks show 68% reduction in network payload serialization overhead and 4.8x higher throughput on inter-service RPCs.
+- Backward Compatibility: Protobuf linting (`buf lint`) and breaking change detection (`buf breaking --against '.git#branch=main'`) are enforced in CI.
+- Migration office hours will be hosted every Tuesday at 16:00 UTC.""",
+            tags=["gmail", "architecture", "grpc", "protobuf", "performance", "engineering"],
+            permissions=OKFPermissions(allowed_roles=["employee", "engineer"], is_public=False),
+            extra_metadata={"source": "gmail", "resource_type": "email"},
+        ),
 
-        # 6. Confluence: Engineering RFC & Platform Guidelines
+        # =====================================================================
+        # 6. CONFLUENCE (Engineering RFCs, ADRs, DR Strategy)
+        # =====================================================================
         OKFConcept(
             type="Page",
             title="RFC-402: Distributed Event Ingestion & Kafka Topic Architecture",
@@ -212,6 +400,41 @@ Topic Naming Convention: `<environment>.<domain>.<entity>.<event_type>.v<version
 Producers must configure `acks=all` and `min.insync.replicas=2` for financial durability.""",
             tags=["confluence", "architecture", "kafka", "rfc"],
             permissions=OKFPermissions(allowed_roles=["employee", "engineer"], is_public=False),
+            extra_metadata={"source": "confluence", "resource_type": "page"},
+        ),
+        OKFConcept(
+            type="Page",
+            title="ADR-088: PgBouncer Connection Pooling Strategy & Transaction Mode Standards",
+            resource="https://confluence.company.com/display/ARCH/ADR-088",
+            body="""# ADR-088: PostgreSQL PgBouncer Connection Pooling Architecture & Mode Decision
+Status: ACCEPTED | Date: 2026-08-14 | Deciders: Principal Architect, Head of SRE, Principal DB Engineer
+Context:
+With over 450 microservice container instances connecting to Aurora PostgreSQL, database backend memory was saturated by idle client connections (> 5,000 connections consumed 36GB RAM).
+Decision:
+1. Deploy dedicated PgBouncer sidecars in Kubernetes pods for high-traffic services, plus a shared central PgBouncer HA proxy pool for auxiliary jobs.
+2. Connection Mode: `transaction` mode is enforced as the mandatory standard across all OLTP services. `session` mode is strictly forbidden except for analytics batch loaders requiring `LISTEN/NOTIFY`.
+3. Prepared Statements: Microservices using transaction pooling must configure client drivers with named prepared statements disabled or use PgBouncer v1.21+ protocol-level prepared statement support (`max_prepared_statements: 100`).
+4. Pool Sizing: Max pool size per client pod set to `default_pool_size = 25`, `reserve_pool_size = 5`.""",
+            tags=["confluence", "adr", "architecture", "postgres", "pgbouncer", "database"],
+            permissions=OKFPermissions(allowed_roles=["employee", "engineer", "sre"], is_public=False),
+            extra_metadata={"source": "confluence", "resource_type": "page"},
+        ),
+        OKFConcept(
+            type="Page",
+            title="Engineering Strategy: Multi-Region Active-Active Disaster Recovery Architecture (RPO < 1s, RTO < 30s)",
+            resource="https://confluence.company.com/display/SRE/Multi-Region-DR-Strategy",
+            body="""# Engineering Strategy: Multi-Region Active-Active Disaster Recovery Architecture
+Document Owner: SRE & Reliability Engineering Group | Target RPO: < 1 second | Target RTO: < 30 seconds
+Primary Regions: `us-east-1` (Virginia) and `us-west-2` (Oregon).
+Architectural Tenets:
+1. Global Traffic Management: AWS Route53 Application Recovery Controller (ARC) with health check routing controls. Failover between regions is executed via routing control state toggle within 15 seconds.
+2. Data Tier Replication:
+   - Amazon Aurora Global Database with storage-level asynchronous replication (typical cross-region replication lag < 800ms).
+   - DynamoDB Global Tables for distributed idempotency and session tokens with active-active bi-directional multi-region replication.
+   - Kafka MirrorMaker 2 continuously mirrors high-priority financial topics with consumer group offset translation.
+3. Regional Isolation & Blast Radius: Each region runs independent Kubernetes clusters, ingress controllers, secret vaults, and Redis caches to prevent cascading failure propagation.""",
+            tags=["confluence", "sre", "disaster-recovery", "architecture", "multi-region", "reliability"],
+            permissions=OKFPermissions(allowed_roles=["employee", "engineer", "sre", "leadership"], is_public=False),
             extra_metadata={"source": "confluence", "resource_type": "page"},
         ),
     ]
@@ -338,6 +561,7 @@ def setup_live_pipeline(
     llm_provider_name: str = "ollama",
     llm_model: Optional[str] = None,
     max_turns: int = 5,
+    context_format: str = "standard",
 ) -> tuple[LangGraphAgentPlanner, HybridRetriever]:
     """
     Initializes and wires the complete end-to-end Enterprise Knowledge pipeline:
@@ -400,38 +624,7 @@ def setup_live_pipeline(
         neo4j_database=neo4j_database,
     )
 
-    print("🔍 [4/5] Initializing Multi-Modal Retrievers & RRF Fusion Engine...")
-    semantic_retriever = SemanticRetriever(embedder=embedder, vector_store=vector_store)
-    keyword_retriever = KeywordRetriever(bm25_index=bm25_index)
-    graph_retriever = GraphRetriever(bm25_index=bm25_index, vector_store=vector_store)
-    resource_retriever = ResourceLookupRetriever(bm25_index=bm25_index, vector_store=vector_store)
-
-    hybrid_retriever = HybridRetriever(
-        semantic_retriever=semantic_retriever,
-        keyword_retriever=keyword_retriever,
-        entity_graph_retriever=entity_retriever,
-        graph_retriever=graph_retriever,
-    )
-
-    tool_registry = create_default_tool_registry(
-        semantic_retriever=semantic_retriever,
-        keyword_retriever=keyword_retriever,
-        entity_graph_retriever=entity_retriever,
-        graph_retriever=graph_retriever,
-        hybrid_retriever=hybrid_retriever,
-        resource_lookup_retriever=resource_retriever,
-    )
-
-    # Initialize checkpointer for persistent conversation threads
-    checkpointer: Optional[BaseCheckpointSaver] = None
-    if checkpoint_mode and checkpoint_mode.lower() != "none":
-        checkpointer = get_checkpointer(mode=checkpoint_mode, db_path=checkpoint_path)
-        if checkpoint_mode.lower() == "sqlite":
-            print(f"       💾 Conversation Threads: SQLite persistence enabled @ {checkpoint_path}")
-        else:
-            print(f"       🧠 Conversation Threads: In-memory volatile checkpointer enabled")
-
-    print(f"🤖 [5/5] Connecting to LLM Provider: {llm_provider_name.upper()}...")
+    print(f"🤖 [4/6] Connecting to LLM Provider: {llm_provider_name.upper()}...")
     if llm_model:
         if llm_provider_name == "ollama":
             os.environ["OLLAMA_MODEL"] = llm_model
@@ -452,6 +645,51 @@ def setup_live_pipeline(
             print(f"   • Or use Google Gemini: Pass `--provider gemini` (needs GEMINI_API_KEY)\n")
 
     llm_provider = get_llm_provider(llm_provider_name)
+
+    print("📋 [5/6] Building Global Master Index (global_index.md, global_index.toon) & Sync Ledger (global_log.md)...")
+    catalog_manager = GlobalCatalogManager()
+    corpus_all = get_sample_enterprise_corpus()
+    for concept in corpus_all:
+        catalog_manager.add_concept(concept)
+    catalog_manager.save_to_disk("./data")
+    print(f"       ✓ Aggregated {len(catalog_manager.entries)} catalog entries across all connectors into data/global_index.md, data/global_index.toon & data/global_log.md")
+
+    print("🔍 [6/6] Initializing Multi-Modal Retrievers & RRF Fusion Engine...")
+    catalog_retriever = CatalogRetriever(
+        catalog_manager=catalog_manager,
+        llm_provider=llm_provider,
+    )
+    semantic_retriever = SemanticRetriever(embedder=embedder, vector_store=vector_store)
+    keyword_retriever = KeywordRetriever(bm25_index=bm25_index)
+    graph_retriever = GraphRetriever(bm25_index=bm25_index, vector_store=vector_store)
+    resource_retriever = ResourceLookupRetriever(bm25_index=bm25_index, vector_store=vector_store)
+
+    hybrid_retriever = HybridRetriever(
+        semantic_retriever=semantic_retriever,
+        keyword_retriever=keyword_retriever,
+        entity_graph_retriever=entity_retriever,
+        graph_retriever=graph_retriever,
+    )
+
+    tool_registry = create_default_tool_registry(
+        catalog_retriever=catalog_retriever,
+        semantic_retriever=semantic_retriever,
+        keyword_retriever=keyword_retriever,
+        entity_graph_retriever=entity_retriever,
+        graph_retriever=graph_retriever,
+        hybrid_retriever=hybrid_retriever,
+        resource_lookup_retriever=resource_retriever,
+    )
+
+    # Initialize checkpointer for persistent conversation threads
+    checkpointer: Optional[BaseCheckpointSaver] = None
+    if checkpoint_mode and checkpoint_mode.lower() != "none":
+        checkpointer = get_checkpointer(mode=checkpoint_mode, db_path=checkpoint_path)
+        if checkpoint_mode.lower() == "sqlite":
+            print(f"       💾 Conversation Threads: SQLite persistence enabled @ {checkpoint_path}")
+        else:
+            print(f"       🧠 Conversation Threads: In-memory volatile checkpointer enabled")
+
     reranker = CrossEncoderReranker()
 
     planner = LangGraphAgentPlanner(
@@ -459,9 +697,12 @@ def setup_live_pipeline(
         tool_registry=tool_registry,
         reranker=reranker,
         checkpointer=checkpointer,
+        global_catalog_manager=catalog_manager,
+        graph_retriever=graph_retriever,
         enable_reranking=True,
         max_turns=max_turns,
         max_retrieval_attempts=3,
+        context_format=context_format,
     )
 
     return planner, hybrid_retriever
@@ -500,6 +741,24 @@ def run_automated_live_tests(planner: LangGraphAgentPlanner) -> None:
             "user_context": {"roles": ["ciso_admin", "secops"], "user_id": "ciso@company.com"},
             "expected_keywords": ["arn:aws:kms:us-east-1", "vault-prod-master"],
         },
+        {
+            "name": "Case 6: SRE OpenSearch Zero-Downtime Reindexing (Dropbox SOP)",
+            "query": "What are the exact steps and alias switchover procedure for OpenSearch cluster reindexing?",
+            "user_context": {"roles": ["sre", "engineer"], "user_id": "sre@company.com"},
+            "expected_keywords": ["product_catalog_v2", "_reindex", "_aliases"],
+        },
+        {
+            "name": "Case 7: DevOps Kubernetes Ingress & TLS Architecture (GitHub Manifest)",
+            "query": "What Cert-Manager ClusterIssuer and rate limits are configured for production Kubernetes ingress?",
+            "user_context": {"roles": ["engineer", "sre"], "user_id": "devops@company.com"},
+            "expected_keywords": ["letsencrypt-production", "nginx-external", "500"],
+        },
+        {
+            "name": "Case 8: Real-Time Streaming Data Pipeline (Jira DATA-782)",
+            "query": "How was clickstream latency reduced from 8 hours to under 45 seconds according to DATA-782?",
+            "user_context": {"roles": ["engineer", "employee"], "user_id": "data-eng@company.com"},
+            "expected_keywords": ["DATA-782", "Flink", "Iceberg", "45 seconds"],
+        },
     ]
 
     print("\n" + "=" * 80)
@@ -519,11 +778,15 @@ def run_automated_live_tests(planner: LangGraphAgentPlanner) -> None:
 
         print(f"\n  ⏱️ Execution Time: {elapsed:.2f}s | Turns: {result['turns']}")
         print(f"  🛠️ Tools Called ({len(result['tool_calls'])}): {[tc_item['tool'] for tc_item in result['tool_calls']]}")
-        print(f"  📑 Chunks Retrieved: {len(result['retrieved_chunks'])} | Reranked: {result['rerank_applied']}")
+        print(f"  📑 Chunks Retrieved ({len(result['retrieved_chunks'])}): | Reranked: {result['rerank_applied']}")
+        for c in result.get("retrieved_chunks", []):
+            tool_name = c.get("retrieved_by_tool") or c.get("tool") or "retriever"
+            print(f"     • [{tool_name}] \"{c.get('title')}\" ({c.get('source', '').upper()})")
         print(f"  🏷️ Citations Generated ({len(result['citations'])}):")
         for cit in result["citations"]:
             cit_idx = cit.get('citation_index') or cit.get('index') or cit.get('id') or 1
-            print(f"     [{cit_idx}] {cit.get('title')} ({cit.get('source')}) -> {cit.get('url')}")
+            tool_str = f" [via {cit.get('tool')}]" if cit.get('tool') else ""
+            print(f"     [{cit_idx}] {cit.get('title')} ({cit.get('source')}){tool_str} -> {cit.get('url')}")
 
         print(f"\n  💬 Agent Answer:\n{result['answer']}\n")
 
@@ -551,13 +814,17 @@ def run_interactive_repl(planner: LangGraphAgentPlanner) -> None:
     print("\n" + "=" * 80)
     print("💬 INTERACTIVE ENTERPRISE KNOWLEDGE AGENT REPL")
     print("   Type your questions below.")
-    print("   Special commands:")
+    print("   Session Commands:")
     print("     • 'role <role_name>'   - Switch active security persona (e.g. engineer, ciso_admin, guest)")
     print("     • 'thread <thread_id>' - Switch active conversation thread/session")
-    print("     • 'threads'            - List all saved conversation threads in storage")
+    print("     • 'threads'            - List all saved conversation threads in SQLite storage")
     print("     • 'new'                - Start a fresh conversation thread")
     print("     • 'history'            - Display message history for current thread")
     print("     • 'exit' or 'quit'     - Exit REPL")
+    print("   Query Scope Modifiers:")
+    print("     • '@enterprise <query>' - Force enterprise retrieval tools across connectors")
+    print("     • '@general <query>'    - Direct LLM conceptual/meta answer (0 tools, 0s retrieval)")
+    print("     • '@<connector> <query>' - Target specific source (e.g. @jira, @github, @dropbox)")
     print("=" * 80)
 
     current_role = "engineer"
@@ -648,7 +915,12 @@ def run_interactive_repl(planner: LangGraphAgentPlanner) -> None:
                         print(f"   • {tc.get('tool')}({args_str})")
                 else:
                     print(f"🛠️  Tools Called: None (direct reasoning)")
-                print(f"📑 Chunks Retrieved: {len(result.get('retrieved_chunks', []))} | Reranked: {result.get('rerank_applied', False)}")
+                
+                chunks = result.get('retrieved_chunks', [])
+                print(f"📑 Chunks Retrieved ({len(chunks)}) | Reranked: {result.get('rerank_applied', False)}")
+                for c in chunks:
+                    tool_name = c.get("retrieved_by_tool") or c.get("tool") or "retriever"
+                    print(f"   • [{tool_name}] \"{c.get('title')}\" ({c.get('source', '').upper()})")
 
                 print(f"\n💬 Answer:")
                 print(result["answer"])
@@ -658,8 +930,9 @@ def run_interactive_repl(planner: LangGraphAgentPlanner) -> None:
                     print("🏷️  Citations:")
                     for cit in result["citations"]:
                         cit_idx = cit.get('citation_index') or cit.get('index') or cit.get('id') or 1
+                        tool_str = f" [via {cit.get('tool')}]" if cit.get('tool') else ""
                         url_str = f" -> {cit.get('url')}" if cit.get('url') else ""
-                        print(f"   [{cit_idx}] {cit.get('title')} ({cit.get('source')}){url_str}")
+                        print(f"   [{cit_idx}] {cit.get('title')} ({cit.get('source')}){tool_str}{url_str}")
             except Exception as query_err:
                 err_str = str(query_err)
                 print(f"\n❌ Error processing query: {err_str}")
@@ -687,7 +960,8 @@ def main() -> None:
     parser.add_argument("--neo4j-user", default=os.getenv("NEO4J_USERNAME", "neo4j"), help="Neo4j username (default: neo4j)")
     parser.add_argument("--neo4j-password", default=os.getenv("NEO4J_PASSWORD", None), help="Neo4j password (optional: falls back to in-memory graph)")
     parser.add_argument("--neo4j-database", default=os.getenv("NEO4J_DATABASE", "neo4j"), help="Neo4j database name (default: neo4j)")
-    parser.add_argument("--max-turns", type=int, default=6, help="Maximum agent reflection turns (default: 5)")
+    parser.add_argument("--max-turns", type=int, default=10, help="Maximum agent reflection turns (default: 10)")
+    parser.add_argument("--context-format", default="standard", choices=["standard", "toon"], help="Evidence context formatting ('standard' or 'toon') (default: standard)")
     parser.add_argument("--interactive", action="store_true", help="Launch interactive REPL mode after setup")
     args = parser.parse_args()
 
@@ -701,6 +975,7 @@ def main() -> None:
     print(f"   Vectors:   Qdrant ({args.qdrant_mode.upper()}) @ {storage_target}")
     print(f"   Graph:     {graph_target}")
     print(f"   Sessions:  Checkpointer ({args.checkpoint_mode.upper()}) @ {checkpoint_target}")
+    print(f"   Context:   {args.context_format.upper()} format")
     print(f"   Turns:     Max {args.max_turns} agent turns")
     print("=" * 80)
 
@@ -720,6 +995,7 @@ def main() -> None:
             llm_provider_name=args.provider,
             llm_model=args.model,
             max_turns=args.max_turns,
+            context_format=args.context_format,
         )
     except Exception as e:
         print(f"\n❌ Error initializing pipeline: {e}")

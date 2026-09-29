@@ -17,6 +17,7 @@ from langchain_core.tools import BaseTool, StructuredTool, tool
 from pydantic import BaseModel, Field
 
 from backend.agent.tools import ToolRegistry
+from backend.retrieval.catalog import CatalogRetriever
 from backend.retrieval.entity_graph import EntityGraphRetriever
 from backend.retrieval.graph import GraphRetriever
 from backend.retrieval.hybrid import HybridRetriever
@@ -27,6 +28,20 @@ from backend.storage.bm25_index import BM25Index
 
 
 # ── Pydantic Schemas for LangChain Tool Arguments ─────────────────────────────
+
+class CatalogDiscoveryInput(BaseModel):
+    """Input parameters for Map-First Global Index and Sync Ledger discovery."""
+    query: str = Field(
+        description="Natural language question, topic, system name, or entity keywords to discover across the global master index."
+    )
+    domain: Optional[str] = Field(
+        default=None,
+        description="Optional domain filter (e.g. 'Payments & Checkout', 'Infrastructure & Disaster Recovery', 'Security & Cryptography', 'Data Platform & Messaging', 'Incident Response & Reliability')."
+    )
+    connector: Optional[str] = Field(
+        default=None,
+        description="Optional platform filter ('github', 'jira', 'notion', 'dropbox', 'gmail', 'confluence')."
+    )
 
 class HybridSearchInput(BaseModel):
     """Input parameters for unified multi-modal hybrid search (RRF)."""
@@ -43,11 +58,11 @@ class HybridSearchInput(BaseModel):
     )
     source: Optional[str] = Field(
         default=None,
-        description="Optional filter by platform: 'github', 'notion', 'dropbox', 'gmail', 'slack'."
+        description="DO NOT set unless user explicitly requested a specific platform in their query ('github', 'jira', 'notion', 'dropbox', 'gmail', 'confluence'). Omit to search all."
     )
     resource_type: Optional[str] = Field(
         default=None,
-        description="Optional filter by resource type: 'repository', 'file', 'issue', 'page', 'email', 'playbook'."
+        description="DO NOT set unless user explicitly requested a specific type ('repository', 'file', 'issue', 'page', 'email', 'runbook'). Omit to search all."
     )
     k: int = Field(
         default=60,
@@ -66,11 +81,11 @@ class SemanticSearchInput(BaseModel):
     )
     source: Optional[str] = Field(
         default=None,
-        description="Optional filter by platform: 'github', 'notion', 'dropbox', 'gmail', 'slack'."
+        description="DO NOT set unless user explicitly requested a specific platform in their query ('github', 'jira', 'notion', 'dropbox', 'gmail', 'confluence'). Omit to search all."
     )
     resource_type: Optional[str] = Field(
         default=None,
-        description="Optional filter by resource type: 'repository', 'file', 'issue', 'page', 'email', 'playbook'."
+        description="DO NOT set unless user explicitly requested a specific type ('repository', 'file', 'issue', 'page', 'email', 'runbook'). Omit to search all."
     )
 
 
@@ -85,11 +100,11 @@ class KeywordSearchInput(BaseModel):
     )
     source: Optional[str] = Field(
         default=None,
-        description="Optional filter by platform: 'github', 'notion', 'dropbox', 'gmail', 'slack'."
+        description="DO NOT set unless user explicitly requested a specific platform in their query ('github', 'jira', 'notion', 'dropbox', 'gmail', 'confluence'). Omit to search all."
     )
     resource_type: Optional[str] = Field(
         default=None,
-        description="Optional filter by resource type: 'repository', 'file', 'issue', 'page', 'email', 'playbook'."
+        description="DO NOT set unless user explicitly requested a specific type ('repository', 'file', 'issue', 'page', 'email', 'runbook'). Omit to search all."
     )
 
 
@@ -149,19 +164,22 @@ def create_langchain_tools(
     graph_retriever: Optional[GraphRetriever] = None,
     entity_graph_retriever: Optional[EntityGraphRetriever] = None,
     hybrid_retriever: Optional[HybridRetriever] = None,
+    catalog_retriever: Optional[CatalogRetriever] = None,
     bm25_index: Optional[BM25Index] = None,
     user_context: Optional[Dict[str, Any]] = None,
 ) -> List[BaseTool]:
     """
     Creates standard LangChain BaseTool instances with bound RBAC security context
-    across all 6 enterprise retrieval modalities:
-      1. `hybrid_search`: Unified multi-modal fusion search combining vector, BM25, and graph via RRF.
-      2. `semantic_search`: Dense vector search.
-      3. `keyword_search`: Sparse BM25+ search.
-      4. `resource_lookup`: Direct URI / document lookup.
-      5. `graph_traversal`: Parent-child hierarchy navigation & sibling expansion.
-      6. `github_entity_search`: Developer intelligence, PRs, commits, reviews & graph paths.
+    across all enterprise retrieval modalities:
+      1. `catalog_discovery`: Map-First Global Index and Sync Ledger discovery tool.
+      2. `hybrid_search`: Unified multi-modal fusion search combining vector, BM25, and graph via RRF.
+      3. `semantic_search`: Dense vector search.
+      4. `keyword_search`: Sparse BM25+ search.
+      5. `resource_lookup`: Direct URI / document lookup.
+      6. `graph_traversal`: Parent-child hierarchy navigation & sibling expansion.
+      7. `github_entity_search`: Developer intelligence, PRs, commits, reviews & graph paths.
     """
+    cat_retriever = catalog_retriever or CatalogRetriever()
     retriever = semantic_retriever or SemanticRetriever()
     shared_vector_store = getattr(retriever, "vector_store", None)
     shared_bm25 = bm25_index or getattr(keyword_retriever, "bm25_index", None) or (
@@ -192,6 +210,19 @@ def create_langchain_tools(
     user_roles = ctx.get("roles") or ctx.get("allowed_roles")
     user_id = ctx.get("user_id")
     user_groups = ctx.get("groups")
+
+    def run_catalog_discovery(
+        query: str,
+        domain: Optional[str] = None,
+        connector: Optional[str] = None,
+    ) -> str:
+        results = cat_retriever.discover(
+            query=query,
+            user_context=ctx,
+            domain=domain,
+            connector=connector,
+        )
+        return json.dumps(results, ensure_ascii=False)
 
     def run_hybrid_search(
         query: str,
@@ -305,9 +336,9 @@ def create_langchain_tools(
     hybrid_tool = StructuredTool.from_function(
         name="hybrid_search",
         description=(
-            "Execute unified multi-modal hybrid search across vector embeddings, BM25+ keywords, and "
-            "knowledge graph entities using Reciprocal Rank Fusion (RRF). Ideal when a query contains both "
-            "conceptual requirements and exact technical tokens (e.g. error codes, identifiers, function names)."
+            "Preferred default search tool: Executes unified multi-modal hybrid search across vector embeddings, "
+            "BM25+ keywords, and knowledge graph entities using Reciprocal Rank Fusion (RRF) with cross-encoder reranking. "
+            "Ideal for searching runbooks, procedures, SOPs, topics, error codes, and technical documentation across all platforms."
         ),
         func=run_hybrid_search,
         args_schema=HybridSearchInput,
@@ -336,9 +367,10 @@ def create_langchain_tools(
     resource_tool = StructuredTool.from_function(
         name="resource_lookup",
         description=(
-            "Retrieve complete text and metadata of a specific document, runbook, SOP, API specification, or policy "
-            "by its document title, topic name, canonical URI (e.g. 'github://...', 'https://...'), URL, or chunk ID. "
-            "Reconstructs the full document in sequential reading order."
+            "Retrieve the complete sequential text of a specific known document, runbook, or ticket by exact "
+            "document title, canonical URI (e.g. 'jira://issue/PAY-928', 'https://...'), URL, or document ID. "
+            "Use ONLY when you already know the specific document title or ticket key to read. "
+            "For general topic searching, finding relevant chunks, or broad inquiries, use hybrid_search instead."
         ),
         func=run_resource_lookup,
         args_schema=ResourceLookupInput,
@@ -367,7 +399,18 @@ def create_langchain_tools(
         args_schema=GithubEntitySearchInput,
     )
 
-    return [hybrid_tool, semantic_tool, keyword_tool, resource_tool, graph_tool, entity_tool]
+    catalog_tool = StructuredTool.from_function(
+        name="catalog_discovery",
+        description=(
+            "Inspect the Global Master Index (global_index.md) and sync ledger (global_log.md) across all 6 platforms "
+            "(GitHub, Jira, Notion, Dropbox, Gmail, Confluence) to discover relevant enterprise assets, runbooks, PRs, and "
+            "tickets for enterprise-specific queries. DO NOT use for general definitions or conversation history."
+        ),
+        func=run_catalog_discovery,
+        args_schema=CatalogDiscoveryInput,
+    )
+
+    return [catalog_tool, hybrid_tool, semantic_tool, keyword_tool, resource_tool, graph_tool, entity_tool]
 
 
 

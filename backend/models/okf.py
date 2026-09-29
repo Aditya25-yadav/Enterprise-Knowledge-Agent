@@ -253,6 +253,40 @@ class OKFConcept:
             "structured_data": self.structured_data,
         }
 
+    def to_toon(self) -> str:
+        """Serializes this concept into compact TOON representation."""
+        from backend.serialization.toon import serialize_toon_chunk
+        return serialize_toon_chunk({
+            "chunk_id": self.resource or "",
+            "source": self.extra_metadata.get("source") or (self.tags[0] if self.tags else "doc"),
+            "domain": self.extra_metadata.get("domain", ""),
+            "allowed_roles": self.permissions.allowed_roles if self.permissions else ["employee"],
+            "resource_type": self.type,
+            "title": self.title or "",
+            "text": self.body or "",
+            "url": self.resource or "",
+            "tags": self.tags,
+        })
+
+    @classmethod
+    def from_toon(cls, toon_str: str) -> "OKFConcept":
+        """Deserializes a TOON string into an OKFConcept."""
+        from backend.serialization.toon import deserialize_toon_chunk
+        d = deserialize_toon_chunk(toon_str)
+        perms = OKFPermissions(allowed_roles=d.get("allowed_roles", ["employee"]))
+        return cls(
+            type=d.get("resource_type", "Document"),
+            title=d.get("title", ""),
+            resource=d.get("url") or d.get("chunk_id") or "",
+            tags=[d.get("source", "doc")],
+            permissions=perms,
+            body=d.get("text", ""),
+            extra_metadata={
+                "source": d.get("source", "doc"),
+                "domain": d.get("domain", "Engineering"),
+            },
+        )
+
     @classmethod
     def from_intermediate_document(
         cls,

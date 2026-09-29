@@ -793,8 +793,9 @@ Query `/healthz` endpoint to confirm 200 OK status.
             entity_graph_retriever=self.entity_retriever,
             user_context={"roles": ["engineer"], "user_id": "eng@company.com"},
         )
-        self.assertEqual(len(lc_tools), 6)
+        self.assertEqual(len(lc_tools), 7)
         tool_names = [t.name for t in lc_tools]
+        self.assertIn("catalog_discovery", tool_names)
         self.assertIn("hybrid_search", tool_names)
         self.assertIn("semantic_search", tool_names)
         self.assertIn("keyword_search", tool_names)

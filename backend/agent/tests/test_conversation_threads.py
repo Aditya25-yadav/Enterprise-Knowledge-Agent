@@ -103,6 +103,8 @@ class MockMultiTurnLLM(LLMProvider):
 
         # Context builder / Answer synthesis
         combined_text = " ".join(m.content for m in messages if m.role == MessageRole.USER)
+        if "last question" in combined_text.lower() or "previous question" in combined_text.lower():
+            return "The last question you asked was: 'Who authored PR #142?'"
         if "file" in combined_text.lower() or "modify" in combined_text.lower():
             return "Alice modified backend/services/checkout.py in PR #142 [1]."
         if "author" in combined_text.lower() or "142" in combined_text.lower():
@@ -466,6 +468,40 @@ class TestConversationThreadsAndCheckpointing(unittest.TestCase):
         threads_after = saver.get_all_threads()
         self.assertNotIn("thread_alpha", threads_after)
         self.assertIn("thread_beta", threads_after)
+
+    def test_meta_conversational_query_direct_answer(self) -> None:
+        """Test that meta-conversational queries (e.g. 'what was the last question I asked') answer directly with 0 tools called."""
+        checkpointer = MemorySaver()
+        mock_llm = MockMultiTurnLLM()
+        planner = LangGraphAgentPlanner(
+            llm_provider=mock_llm,
+            tool_registry=self.tool_registry,
+            checkpointer=checkpointer,
+            enable_reranking=False,
+        )
+
+        user_ctx = {"roles": ["engineer"], "user_id": "eng@company.com"}
+        thread_id = "meta_test_session"
+
+        # Turn 1: Regular inquiry with tool execution
+        res1 = planner.run(
+            query="Who authored PR #142?",
+            user_context=user_ctx,
+            thread_id=thread_id,
+        )
+        self.assertIn("Alice", res1["answer"])
+        self.assertGreater(len(res1["tool_calls"]), 0)
+
+        # Turn 2: Meta-conversational inquiry
+        res2 = planner.run(
+            query="what was the last question i asked",
+            user_context=user_ctx,
+            thread_id=thread_id,
+        )
+        self.assertIn("Who authored PR #142?", res2["answer"])
+        # Must execute with 0 tool calls in Turn 2 and 0 citations
+        self.assertEqual(len(res2["tool_calls"]), 0, "Meta-conversational turn must not execute retrieval tools")
+        self.assertEqual(len(res2["citations"]), 0, "Direct meta answers must not have citations")
 
 
 if __name__ == "__main__":

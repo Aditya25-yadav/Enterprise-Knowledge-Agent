@@ -540,6 +540,78 @@ class InMemoryEntityGraph:
             "default_branch": repo.get("default_branch", "main") if repo else "main",
         }
 
+    def get_entity_subgraph_toon(self, entity_id_or_alias: str) -> Optional[str]:
+        """
+        Generates a compact TOON subgraph tag summarizing ownership, review chain,
+        merged timestamps, and linked items for an entity (e.g. PR, Commit, Issue, User, File).
+
+        Example:
+            [G:PR#142|author=alice|reviewers=bob|status=MERGED|repo=company/payments]
+        """
+        entity = self.get_entity(entity_id_or_alias)
+        if not entity:
+            return None
+
+        lbl = entity.get("label") or "Entity"
+        parts = []
+
+        if lbl in ("PullRequest", NodeLabel.PULL_REQUEST.value):
+            pr_num = entity.get("number") or entity_id_or_alias
+            parts.append(f"G:PR#{pr_num}")
+            pr_details = self.get_pr_details(str(pr_num))
+            if pr_details:
+                if pr_details.get("author"):
+                    parts.append(f"author={pr_details['author']}")
+                reviewers = pr_details.get("reviewers") or []
+                if reviewers:
+                    parts.append(f"reviewers={','.join(reviewers)}")
+                if pr_details.get("state"):
+                    parts.append(f"status={pr_details['state']}")
+                if pr_details.get("merged_at"):
+                    parts.append(f"merged={str(pr_details['merged_at'])[:10]}")
+                if pr_details.get("base_branch"):
+                    parts.append(f"base={pr_details['base_branch']}")
+
+        elif lbl in ("Issue", NodeLabel.ISSUE.value):
+            issue_num = entity.get("number") or entity_id_or_alias
+            parts.append(f"G:Issue#{issue_num}")
+            issue_details = self.get_issue_details(str(issue_num))
+            if issue_details:
+                if issue_details.get("author"):
+                    parts.append(f"author={issue_details['author']}")
+                assignees = issue_details.get("assignees") or []
+                if assignees:
+                    parts.append(f"assignees={','.join(assignees)}")
+                if issue_details.get("state"):
+                    parts.append(f"status={issue_details['state']}")
+
+        elif lbl in ("Commit", NodeLabel.COMMIT.value):
+            sha = str(entity.get("sha") or entity.get("node_id") or "")[:8]
+            parts.append(f"G:Commit:{sha}")
+            commit_details = self.get_commit_details(entity.get("node_id", ""))
+            if commit_details and commit_details.get("author"):
+                parts.append(f"author={commit_details['author']}")
+
+        elif lbl in ("User", NodeLabel.USER.value):
+            login = entity.get("login") or entity.get("name") or entity_id_or_alias
+            parts.append(f"G:User:{login}")
+            user_act = self.get_user_activity(login)
+            if user_act:
+                prs = user_act.get("authored_prs", [])
+                parts.append(f"prs_count={len(prs)}")
+
+        elif lbl in ("File", NodeLabel.FILE.value):
+            path = entity.get("path") or entity.get("filename") or entity_id_or_alias
+            parts.append(f"G:File:{path}")
+            file_contribs = self.get_file_contributors(path)
+            if file_contribs and file_contribs.get("authors"):
+                parts.append(f"contributors={','.join(file_contribs['authors'])}")
+
+        if not parts:
+            parts.append(f"G:{lbl}:{entity.get('node_id', entity_id_or_alias)}")
+
+        return "[" + "|".join(parts) + "]"
+
 
 class EntityGraphRetriever:
     """
@@ -658,6 +730,8 @@ class EntityGraphRetriever:
             return self._neo4j_get_team_overview(team_slug_or_id=target) if use_neo4j else self.memory_graph.get_team_overview(team_slug_or_id=target)
         elif op == "get_repo_overview":
             return self._neo4j_get_repo_overview(repo_name=target) if use_neo4j else self.memory_graph.get_repo_overview(repo_name=target)
+        elif op == "get_entity_subgraph_toon":
+            return self.get_entity_subgraph_toon(target)
 
         # ── 3. Raw Cypher Execution (Neo4j mode) ──
         elif op == "raw_cypher":
@@ -669,6 +743,10 @@ class EntityGraphRetriever:
             return {"error": "raw_cypher requires active Neo4j connection. Use structured operations for in-memory mode."}
 
         return {"error": f"Unsupported entity graph operation '{operation}'"}
+
+    def get_entity_subgraph_toon(self, entity_id_or_alias: str) -> Optional[str]:
+        """Returns compact TOON representation of an entity subgraph."""
+        return self.memory_graph.get_entity_subgraph_toon(entity_id_or_alias)
 
     # ── Native Parameterized Cypher Implementations for Neo4j Mode ────────────
 
