@@ -13,3 +13,46 @@
    - `@web`: Targets external internet / web documentation search.
    - `@github`, `@jira`, `@notion`, `@dropbox`, `@gmail`, `@confluence`: Scopes search strictly to a specific connector platform.
    - *Detailed design and architecture guide in [`docs/query_scope_modifiers.md`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/docs/query_scope_modifiers.md).*
+Phase 1 — Basic multi-turn
+LangGraph Checkpointer
++
+thread_id
++
+recent-message window
+Phase 2 — Proper context budgeting
+Token-based trimming
++
+tool-result trimming
+Phase 3 — Better continuity
+Conversation summary
++
+query rewriting
+Phase 4 — Better retrieval
+Hybrid retrieval
++
+reranking
++
+contextual retrieval
+
+Your existing architecture already has the foundations for this hybrid approach.
+
+Phase 5 — Agentic context
+Just-in-time retrieval
++
+progressive disclosure
++
+dynamic tool selection
+Phase 6 — Long-running conversations
+Structured notes
++
+long-term memory
++
+relevant historical-message retrieval
+Phase 7 — Advanced architecture
+Sub-agents
++
+context isolation
++
+artifact-based handoffs
++
+context resets
