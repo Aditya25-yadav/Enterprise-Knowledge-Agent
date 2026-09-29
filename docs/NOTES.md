@@ -13,6 +13,9 @@
    - `@web`: Targets external internet / web documentation search.
    - `@github`, `@jira`, `@notion`, `@dropbox`, `@gmail`, `@confluence`: Scopes search strictly to a specific connector platform.
    - *Detailed design and architecture guide in [`docs/query_scope_modifiers.md`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/docs/query_scope_modifiers.md).*
+
+
+
 Phase 1 — Basic multi-turn
 LangGraph Checkpointer
 +
