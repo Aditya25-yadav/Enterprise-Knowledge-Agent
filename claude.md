@@ -2604,6 +2604,37 @@ This document maintains a chronological record of all architectural decisions, c
 - [`docs/enhancements.md`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/docs/enhancements.md) (Created)
 - [`claude.md`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/claude.md) (Updated)
 
+---
+
+## Step 104: Authored Full-Stack Architecture, Connector Filtering, CDC Ingestion & FastAPI Implementation Plan
+- **Date:** 2026-10-01
+- **Time:** 10:45 IST
+- **Purpose:** Authored `docs/backend_frontend_architecture_plan.md` defining the complete production architecture for the Enterprise Knowledge Agent, covering dynamic frontend connector check/uncheck toggles, `@scope` query conflict resolution, incremental Change Data Capture (CDC) with 3-tier differential hashing, and a phased FastAPI backend service plan with Server-Sent Events (SSE) streaming.
+- **Key Deliverables & Specifications:**
+  1. **Full-Stack Topology Diagram:** ASCII architecture illustrating React/Vite frontend with connector toggles, FastAPI async service layer with SSE streaming, LangGraph 6-node state machine, Qdrant/BM25/Neo4j storage tier, and async CDC ingestion worker.
+  2. **Connector Check/Uncheck Filtering & Scope Conflict Handling:**
+     - Dynamic `enabled_connectors` list passed via API payloads and HTTP headers (`X-Enabled-Connectors`).
+     - Hard pre-filtering across Qdrant, BM25, Neo4j, Catalog Discovery, and LLM Context.
+     - Defined conflict matrix for query scope modifiers (`@github`, `@jira`, etc.) when the targeted connector is unchecked (triggering instant early disclaimers/refusals without executing retrieval tools).
+  3. **Incremental Ingestion & CDC Strategy:**
+     - Ingestion decoupled from queries (zero sync re-indexing during user search).
+     - Event-driven webhook receivers (GitHub, Jira, Notion, Dropbox, Gmail) and fallback delta polling cron (`sync_incremental`).
+     - 3-tier differential hashing (Timestamp check $\to$ Document SHA-256 $\to$ Chunk-level SHA-256 diffing) guaranteeing that unmodified chunks are never re-embedded.
+  4. **FastAPI Backend Implementation Plan:**
+     - Proposed directory layout (`backend/api/main.py`, `dependencies.py`, `schemas/`, `routers/`).
+     - Pydantic V2 schemas for `ChatRequest`, `ChatResponse`, `CitationItem`, and streaming events.
+     - Server-Sent Events (SSE) event protocol: `filter_status` $\to$ `node_start` $\to$ `tool_call` $\to$ `tool_result` $\to$ `rerank` $\to$ `token` $\to$ `citations` $\to$ `done`.
+     - Thread-safe `AppContainer` singleton pre-warming Qdrant, BM25, Neo4j, LLM, and LangGraph planner.
+  5. **6-Phase Implementation Roadmap & Verification Checklist.**
+- **Verification:**
+  - Authored `docs/backend_frontend_architecture_plan.md` with full markdown structure and `file:///` links.
+  - Verified 138/138 unit tests passing across all test suites.
+
+### Files Created / Modified:
+- [`docs/backend_frontend_architecture_plan.md`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/docs/backend_frontend_architecture_plan.md) (Created)
+- [`claude.md`](file:///Users/ompatil/Desktop/Enterprise-Knowledge-Agent/claude.md) (Updated)
+
+
 
 
 
